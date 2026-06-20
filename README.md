@@ -1,7 +1,8 @@
 # kb-bot
 
-A low-cost knowledge bot for **Slack and Discord**. It answers questions from Markdown
-knowledge stored in R2/S3 and explains how to use a GitHub-managed app — cheaply.
+A low-cost knowledge bot for **Slack and Discord**. It answers from Markdown knowledge stored in
+R2/S3, and — because docs go stale — it can **read the actual GitHub source code to explain how an
+app behaves and how to use it**, citing file paths and line numbers.
 
 The answer logic (`src/chat/core.ts`) is platform-agnostic; Slack and Discord are just
 adapters (`src/chat/slack.ts` / `src/chat/discord.ts`) you swap in.
@@ -33,6 +34,18 @@ Subscribe to bot events: `app_mention`, `message.im`.
 **Discord:** create a Bot in the Developer Portal and obtain its Bot Token.
 **Enable the "MESSAGE CONTENT INTENT"** under Privileged Gateway Intents (required to read message text).
 Invite the bot with the `bot` scope and the "Send Messages" permission.
+
+**GitHub (optional, "explain specs from real code"):** set `KB_GITHUB_REPOS` to a comma-separated
+allowlist (`owner/name`). For private repos or code search, add a `GITHUB_TOKEN` (a fine-grained PAT
+with read-only Contents, scoped to those repos). Public repos work without a token (tree + file read).
+
+## Reading code as the source of truth
+
+Documentation drifts; the code does not. When `KB_GITHUB_REPOS` is set, the agent gets three tools —
+`list_repo_tree`, `search_repo_code`, `read_repo_file` — and is instructed to treat the **code as the
+source of truth** for questions about an app's behavior, spec, or usage. It navigates the repo, reads
+the relevant files, and cites paths + line numbers in its answer. Access is restricted to the
+allowlisted repos, and secret files (`.env`, `*.pem/key`, `secrets*`) and path traversal are refused.
 
 ## Usage
 
@@ -92,6 +105,7 @@ the bot. The FTS index is derived from R2, so rebuilding it on every boot is fin
 src/
   config.ts        environment variables
   s3.ts            R2/S3 access (aws4fetch, list/get)
+  github.ts        GitHub code access (tree/read/search, allowlist + secret guards)
   kb/
     chunk.ts       heading-aware Markdown chunking
     segment.ts     TinySegmenter morphological segmentation (index/query)
@@ -100,7 +114,8 @@ src/
   cache.ts         answer cache (SQLite)
   agent/
     agent.ts       tool-use loop (streaming, caching, usage)
-    tools.ts       search_knowledge tool
+    tools.ts       search_knowledge tool (FTS over R2/S3 docs)
+    githubTools.ts list_repo_tree / read_repo_file / search_repo_code
   chat/
     core.ts        platform-agnostic answer core (answer / ChatReply)
     slack.ts       Slack ChatReply (postMessage / update, mrkdwn)
