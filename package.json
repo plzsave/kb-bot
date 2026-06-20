@@ -15,7 +15,7 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.104.2",
+    "@anthropic-ai/sdk": "^0.105.0",
     "@slack/bolt": "^4.7.3",
     "aws4fetch": "^1.0.20",
     "discord.js": "^14.26.4",
