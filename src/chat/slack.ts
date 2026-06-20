@@ -18,17 +18,19 @@ export function toSlackMrkdwn(md: string): string {
 }
 
 function convertSegment(s: string): string {
-  return s.split("\n").map(convertLine).join("\n");
+  // ① 行頭記法（水平線・見出し・箇条書き）は行単位で処理
+  const lined = s.split("\n").map(convertLine).join("\n");
+  // ② インライン記法（太字・リンク・打消し）はセグメント全体で処理＝行をまたぐ太字も拾える
+  return convertInline(lined);
 }
 
 function convertLine(line: string): string {
   // 水平線（---, ***, ___）は非対応なので区切り線に置換
   if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) return HR;
-  // 見出し（# 〜 ######）は太字に倒す
+  // 見出し（# 〜 ######）は太字に倒す（中身のインラインは後段でまとめて変換）
   const h = line.match(/^#{1,6}\s+(.*)$/);
-  if (h) line = `*${h[1]}*`;
-  else line = line.replace(/^(\s*)[-*]\s+/, "$1• "); // 箇条書きは • に
-  return convertInline(line);
+  if (h) return `*${h[1]}*`;
+  return line.replace(/^(\s*)[-*]\s+/, "$1• "); // 箇条書きは • に
 }
 
 function convertInline(text: string): string {
@@ -40,9 +42,9 @@ function convertInline(text: string): string {
         ? seg
         : seg
             .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "<$2|$1>") // [t](u) -> <u|t>
-            .replace(/\*\*([^*]+)\*\*/g, "*$1*") // **太字** -> *太字*
-            .replace(/__([^_]+)__/g, "*$1*") // __太字__ -> *太字*
-            .replace(/~~([^~]+)~~/g, "~$1~"), // ~~打消し~~ -> ~打消し~
+            .replace(/\*\*([\s\S]+?)\*\*/g, "*$1*") // **太字** -> *太字*（改行跨ぎ可・最短一致）
+            .replace(/__([\s\S]+?)__/g, "*$1*") // __太字__ -> *太字*
+            .replace(/~~([\s\S]+?)~~/g, "~$1~"), // ~~打消し~~ -> ~打消し~
     )
     .join("");
 }

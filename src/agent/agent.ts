@@ -47,7 +47,8 @@ export async function runAgent(opts: RunAgentOpts): Promise<RunAgentResult> {
   const messages: Anthropic.MessageParam[] = [...opts.messages];
   const usage = emptyUsage();
   const toolsUsed: string[] = [];
-  let full = "";
+  let full = ""; // 全ターンの逐次出力（truncated 時のフォールバック・ライブ表示用）
+  let answerText = ""; // 最終的に回答したターンのテキストだけ（process ログを混ぜない）
   let completed = false;
 
   const maxTurns = opts.maxTurns ?? DEFAULT_MAX_TURNS;
@@ -58,6 +59,7 @@ export async function runAgent(opts: RunAgentOpts): Promise<RunAgentResult> {
   ];
 
   for (let turn = 0; turn < maxTurns; turn++) {
+    let turnText = ""; // このターンの出力（tool_use 前の「確認します」等の前置きを含む）
     const stream = opts.client.messages.stream({
       model: opts.model,
       max_tokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
@@ -68,6 +70,7 @@ export async function runAgent(opts: RunAgentOpts): Promise<RunAgentResult> {
 
     stream.on("text", (delta) => {
       full += delta;
+      turnText += delta;
       opts.onDelta?.(delta);
     });
 
@@ -78,6 +81,8 @@ export async function runAgent(opts: RunAgentOpts): Promise<RunAgentResult> {
     usage.cacheCreation += msg.usage.cache_creation_input_tokens ?? 0;
 
     if (msg.stop_reason !== "tool_use") {
+      // 最終回答ターン。途中のツール実況を混ぜず、このターンのテキストだけを答えにする。
+      answerText = turnText;
       completed = true;
       break;
     }
@@ -96,5 +101,6 @@ export async function runAgent(opts: RunAgentOpts): Promise<RunAgentResult> {
     messages.push({ role: "user", content: results });
   }
 
-  return { text: full, toolsUsed, truncated: !completed, usage };
+  // 完走時は最終回答ターンのみ。途中で打ち切られた時は全出力をフォールバックに使う。
+  return { text: completed ? answerText : full, toolsUsed, truncated: !completed, usage };
 }
