@@ -22,6 +22,10 @@ test("#### 以降の見出しは太字に倒す（Discord は ### まで）", ()
   expect(toDiscordMarkdown("###### 深い見出し")).toBe("**深い見出し**");
 });
 
+test("見出し文中に既に ** がある場合も二重化せず一度だけ太字にする", () => {
+  expect(toDiscordMarkdown("#### 1. **基本的なしくみ**")).toBe("**1. 基本的なしくみ**");
+});
+
 test("水平線は区切り線に置換する", () => {
   expect(toDiscordMarkdown("---")).toBe("──────────");
 });

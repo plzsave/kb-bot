@@ -24,8 +24,10 @@ function convertSegment(s: string): string {
       // 水平線（---, ***, ___）はそのまま文字で出てしまうので区切り線に置換
       if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) return HR;
       // Discord の見出しは ### まで。#### 以降は描画されず文字で出るので太字に倒す。
+      // 見出し文中に既に ** がある（例: #### 1. **基本的なしくみ**）と二重化で崩れるため、
+      // 中のアスタリスクを除去してから一度だけ太字で包む。
       const h = line.match(/^#{4,}\s+(.*)$/);
-      if (h) return convertInline(`**${h[1]}**`);
+      if (h) return convertInline(`**${h[1]!.replace(/\*+/g, "").trim()}**`);
       return convertInline(line);
     })
     .join("\n");

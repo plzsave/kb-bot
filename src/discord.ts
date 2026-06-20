@@ -33,7 +33,7 @@ const client = new Client({
 
 // 1 メッセージを履歴ターンへ（bot 自身は assistant・空/プレースホルダは除外）。
 function toTurn(m: any): HistoryTurn | null {
-  const text = (m.content ?? "").replace(/<@!?\d+>/g, " ").trim();
+  const text = (m.content ?? "").replace(/<@[!&]?\d+>/g, " ").trim();
   if (!text || text === "考え中… ⏳") return null;
   return { role: m.author?.id === client.user?.id ? "assistant" : "user", text };
 }
@@ -82,7 +82,7 @@ client.on(Events.MessageCreate, async (message) => {
   // チャンネルではメンション時のみ反応。DM は常に反応。
   if (!isDM && !mentioned) return;
 
-  const text = message.content.replace(/<@!?\d+>/g, " ").trim(); // メンション除去
+  const text = message.content.replace(/<@[!&]?\d+>/g, " ").trim(); // メンション除去
   const history = await fetchHistory(message);
 
   // 返信先を決める。通常チャンネルでは質問ごとにスレッドを作り、その中で回答（Slack 同等）。
