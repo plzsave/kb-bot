@@ -3,6 +3,13 @@ import { createHash } from "node:crypto";
 
 // 回答キャッシュ。まず完全一致（正規化後）で照会し、ヒットすれば LLM を呼ばずに返す＝最大の節約。
 // 将来は意味的キャッシュ（埋め込み近傍）へ拡張余地。kb.sqlite に同居させる。
+//
+// TTL: ドキュメントやコードは更新されるため、古いキャッシュは陳腐化する。既定 24h で失効させ、
+// 期限切れは照会時に削除する（再生成される）。KB_CACHE_TTL_HOURS=0 で無期限（失効しない）。
+const TTL_MS = (() => {
+  const h = Number(process.env.KB_CACHE_TTL_HOURS);
+  return Number.isFinite(h) && h >= 0 ? h * 3_600_000 : 24 * 3_600_000;
+})();
 
 export function ensureCacheTable(db: Database): void {
   db.run(`
@@ -25,11 +32,17 @@ function keyFor(q: string): string {
 }
 
 export function getCachedAnswer(db: Database, question: string): string | null {
-  const row = db.query("SELECT answer FROM answer_cache WHERE key = ?").get(keyFor(question)) as
-    | { answer: string }
+  const key = keyFor(question);
+  const row = db.query("SELECT answer, created_at FROM answer_cache WHERE key = ?").get(key) as
+    | { answer: string; created_at: number }
     | null;
   if (!row) return null;
-  db.run("UPDATE answer_cache SET hits = hits + 1 WHERE key = ?", [keyFor(question)]);
+  // 期限切れは失効させる（削除して miss 扱い＝次回再生成）。
+  if (TTL_MS > 0 && Date.now() - row.created_at > TTL_MS) {
+    db.run("DELETE FROM answer_cache WHERE key = ?", [key]);
+    return null;
+  }
+  db.run("UPDATE answer_cache SET hits = hits + 1 WHERE key = ?", [key]);
   return row.answer;
 }
 
