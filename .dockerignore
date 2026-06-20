@@ -1,0 +1,9 @@
+# 秘密情報・ローカル成果物・肥大物はイメージに含めない
+.env
+.env.local
+node_modules
+*.sqlite
+*.sqlite-*
+.git
+.gitignore
+README.md

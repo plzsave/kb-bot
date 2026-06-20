@@ -1,0 +1,20 @@
+version: 2
+updates:
+  # npm エコシステム（package.json / bun.lock の依存）
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # GitHub Actions のバージョン
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+
+  # Dockerfile のベースイメージ
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly

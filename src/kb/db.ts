@@ -1,0 +1,66 @@
+import { Database } from "bun:sqlite";
+import type { Chunk } from "./chunk.ts";
+import { indexTokens, queryTerms } from "./segment.ts";
+
+// FTS5(unicode61) + 形態素分割の全文検索インデックス。
+// 本文を分割して空白連結した tokens 列を索引し、原文 body は表示用に UNINDEXED で持つ。
+// これで和文の 2 文字語・助詞分離に強くなり、BM25 ランキングが効く（埋め込み課金ゼロ）。
+// このファイル(SQLite)は R2 の md から導出する派生物＝消えても再取り込みで再構築できる。
+
+export interface SearchHit {
+  docKey: string;
+  heading: string;
+  ord: number;
+  text: string;
+  score: number; // bm25。小さい(より負)ほど良い。
+}
+
+export function openDb(path: string): Database {
+  const db = new Database(path, { create: true });
+  db.run("PRAGMA journal_mode = WAL");
+  db.run(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(
+      doc_key UNINDEXED,
+      heading UNINDEXED,
+      ord UNINDEXED,
+      body UNINDEXED,
+      tokens,
+      tokenize = 'unicode61'
+    )
+  `);
+  return db;
+}
+
+/** 1 ドキュメント分のチャンクを入れ替える（再取り込みで重複しないよう先に削除）。 */
+export function replaceDoc(db: Database, docKey: string, chunks: Chunk[]): void {
+  const del = db.query("DELETE FROM chunks WHERE doc_key = ?");
+  const ins = db.query("INSERT INTO chunks (doc_key, heading, ord, body, tokens) VALUES (?, ?, ?, ?, ?)");
+  const tx = db.transaction(() => {
+    del.run(docKey);
+    for (const c of chunks) ins.run(docKey, c.heading, c.ord, c.text, indexTokens(c.text));
+  });
+  tx();
+}
+
+export function countChunks(db: Database): number {
+  return (db.query("SELECT count(*) AS n FROM chunks").get() as { n: number }).n;
+}
+
+export function search(db: Database, rawQuery: string, limit = 5): SearchHit[] {
+  const match = buildMatchQuery(rawQuery);
+  if (!match) return [];
+  return db
+    .query(
+      `SELECT doc_key AS docKey, heading, ord, body AS text, bm25(chunks) AS score
+       FROM chunks WHERE chunks MATCH ? ORDER BY score ASC LIMIT ?`,
+    )
+    .all(match, limit) as SearchHit[];
+}
+
+// 問い合わせ文を FTS5 クエリ式へ。内容語をフレーズ化して OR で結ぶ（再帰率重視・BM25 で順位付け）。
+export function buildMatchQuery(raw: string): string | null {
+  const terms = queryTerms(raw);
+  if (terms.length === 0) return null;
+  const uniq = [...new Set(terms)];
+  return uniq.map((t) => `"${t.replace(/"/g, '""')}"`).join(" OR ");
+}

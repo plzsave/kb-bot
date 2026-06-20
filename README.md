@@ -1,0 +1,129 @@
+# kb-bot
+
+A low-cost knowledge bot for **Slack and Discord**. It answers questions from Markdown
+knowledge stored in R2/S3 and explains how to use a GitHub-managed app — cheaply.
+
+The answer logic (`src/chat/core.ts`) is platform-agnostic; Slack and Discord are just
+adapters (`src/chat/slack.ts` / `src/chat/discord.ts`) you swap in.
+
+> 日本語版: [README.ja.md](README.ja.md)
+
+## How it keeps costs low
+
+1. **Answer cache** (SQLite, exact match) — a hit skips the LLM entirely (the biggest saver).
+2. **FTS5/BM25 search** (`bun:sqlite` + morphological segmentation) — retrieval with zero embedding-API cost.
+3. **Prompt caching** (`cache_control: ephemeral`) — reuses the system prompt / tool definitions.
+4. **Model tiering** — defaults to `claude-haiku-4-5`; bump to a larger model only when needed (`KB_MODEL`).
+
+> For Japanese knowledge, FTS5 uses **TinySegmenter (morphological segmentation) + unicode61**
+> instead of `trigram`. `trigram` could not match 2-character words (e.g. 「認証」) and recall
+> dropped once particles were glued to keywords — verified, then switched.
+
+## Setup
+
+```bash
+bun install
+cp .env.example .env   # fill in the values (S3/R2, Slack/Discord, Anthropic)
+```
+
+**Slack:** enable Socket Mode → obtain an App-Level Token (`connections:write`) and a Bot Token.
+Bot Token Scopes: `app_mentions:read` `chat:write` `im:history` `im:read`.
+Subscribe to bot events: `app_mention`, `message.im`.
+
+**Discord:** create a Bot in the Developer Portal and obtain its Bot Token.
+**Enable the "MESSAGE CONTENT INTENT"** under Privileged Gateway Intents (required to read message text).
+Invite the bot with the `bot` scope and the "Send Messages" permission.
+
+## Usage
+
+```bash
+# 1. Ingest knowledge (R2/S3 .md → chunk → FTS5 index)
+bun run kb:ingest
+
+# 2. Inspect search quality (eyeball BM25 results)
+bun run kb:search "Where do we deploy?"
+
+# 3. Run the bot (long-running)
+bun run start            # Slack (Socket Mode)   or: bun run dev
+bun run start:discord    # Discord               or: bun run dev:discord
+```
+
+Slack responds to channel mentions and DMs; Discord responds to mentions and DMs.
+
+## Self-hosting (Docker, always-on)
+
+Socket Mode keeps a persistent connection, so the process must stay running. A single container
+runs anywhere (VPS / Fly.io / Railway / Render / ECS Fargate / a home server).
+
+Pull the published image (tagged releases are pushed to GHCR), or build locally:
+
+```bash
+# Pull a released image
+docker pull ghcr.io/plzsave/kb-bot:latest
+
+# Or build & run from source
+cp .env.example .env   # fill in the values
+docker compose up -d --build
+docker compose logs -f # watch startup, ingest, and usage logs
+```
+
+On boot, `docker-entrypoint.sh` ingests the knowledge from R2/S3 (`kb:ingest`) and then starts
+the bot. The FTS index is derived from R2, so rebuilding it on every boot is fine.
+
+- **Persisting the answer cache:** `compose.yaml` mounts the `kbdata` volume at `/app/data` so the
+  cache survives restarts. `KB_DB_PATH` is pinned to `/app/data/kb.sqlite` in compose (overriding `.env`).
+- **Skipping boot-time ingest:** set `KB_INGEST_ON_BOOT=false` if you reuse a persisted index.
+- **Refreshing knowledge:** after updating the `.md` files in R2, run `docker compose restart`.
+- **Choosing the platform:** `KB_PLATFORM=slack` (default) or `discord`. To run Discord, set
+  `KB_PLATFORM=discord` and `DISCORD_BOT_TOKEN` in `.env`. To run both at once, define two compose
+  services that differ only by `KB_PLATFORM`.
+
+### Provider notes
+
+- **VPS / home server:** the compose file as-is. Simplest.
+- **Fly.io:** `fly launch` with the same image (map `[mounts]` to `/app/data` in `fly.toml` to persist the cache).
+- **AWS:** for an always-on process, **ECS Fargate (1 task)** is the natural fit. Cheapest is an
+  **EC2 t4g.nano**; **Lightsail** is the simplest flat-rate option. **Lambda will not work**
+  (it cannot hold a persistent WebSocket). On Fargate's ephemeral FS, persist the answer cache via EFS or re-warm it.
+
+## Layout
+
+```
+src/
+  config.ts        environment variables
+  s3.ts            R2/S3 access (aws4fetch, list/get)
+  kb/
+    chunk.ts       heading-aware Markdown chunking
+    segment.ts     TinySegmenter morphological segmentation (index/query)
+    db.ts          FTS5(unicode61) index + BM25 search
+    ingest.ts      ingest job
+  cache.ts         answer cache (SQLite)
+  agent/
+    agent.ts       tool-use loop (streaming, caching, usage)
+    tools.ts       search_knowledge tool
+  chat/
+    core.ts        platform-agnostic answer core (answer / ChatReply)
+    slack.ts       Slack ChatReply (postMessage / update, mrkdwn)
+    discord.ts     Discord ChatReply (send / edit, 2000-char splitting)
+  index.ts         Slack (Bolt, Socket Mode) entry — wiring only
+  discord.ts       Discord (discord.js) entry — wiring only
+scripts/
+  kb-ingest.ts / kb-search.ts   CLIs
+Dockerfile             bun-based runtime image
+docker-entrypoint.sh   ingest on boot, then start the bot
+compose.yaml           minimal self-hosting setup (with a persistent volume)
+```
+
+## Development
+
+```bash
+bun run typecheck   # tsc --noEmit
+bun test            # unit tests (pure functions; no credentials needed)
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow and
+[SECURITY.md](SECURITY.md) for reporting vulnerabilities.
+
+## License
+
+[MIT](LICENSE)

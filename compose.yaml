@@ -1,0 +1,17 @@
+# セルフホスト用の最小構成。`.env` を読み、常駐（Socket Mode）させる。
+#   docker compose up -d --build
+services:
+  bot:
+    build: .
+    env_file: .env
+    # env_file の KB_DB_PATH を上書きし、確実に永続ボリューム上へ向ける（.env の値に依存しない）。
+    environment:
+      KB_DB_PATH: /app/data/kb.sqlite
+      KB_INGEST_ON_BOOT: "true"
+    # 回答キャッシュを再起動後も残すため /app/data を永続化（FTS は起動時に再構築される派生物）。
+    volumes:
+      - kbdata:/app/data
+    restart: unless-stopped
+
+volumes:
+  kbdata:

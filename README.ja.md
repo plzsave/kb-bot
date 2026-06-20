@@ -1,0 +1,111 @@
+# kb-bot
+
+Slack / Discord 両対応のナレッジ Bot。R2/S3 の Markdown と GitHub 管理アプリの使い方を、低コストで解説する。
+mdcollab の AI エージェント（ネイティブ tool use・プロンプトキャッシュ・usage 計測）の設計を流用。
+
+回答ロジック（`src/chat/core.ts`）はプラットフォーム非依存で、Slack / Discord はアダプタ
+（`src/chat/slack.ts` / `src/chat/discord.ts`）として差し替えるだけ。
+
+> English version: [README.md](README.md)
+
+## 低コスト化の柱
+
+1. **回答キャッシュ**（SQLite, 完全一致）— ヒットすれば LLM を呼ばない＝最大の節約
+2. **FTS5/BM25 検索**（`bun:sqlite` + 形態素分割）— 埋め込み API 課金ゼロでナレッジ取得
+3. **プロンプトキャッシュ**（`cache_control: ephemeral`）— system/tools を再利用
+4. **モデルティア** — 既定 `claude-haiku-4-5`、難問だけ上位へ（`KB_MODEL`）
+
+> 日本語ナレッジのため FTS5 は `trigram` ではなく **TinySegmenter（形態素分割）+ unicode61** を採用。
+> trigram は 2 文字語（例「認証」）を引けず助詞混入で再帰率が落ちたため切替（検証済み）。
+
+## セットアップ
+
+```bash
+bun install
+cp .env.example .env   # 値を埋める（S3/R2・Slack・Anthropic）
+```
+
+**Slack** の場合: Socket Mode を有効化 → App-Level Token（`connections:write`）と Bot Token を取得。
+Bot Token Scopes: `app_mentions:read` `chat:write` `im:history` `im:read`。
+イベント購読（Subscribe to bot events）: `app_mention`、`message.im`。
+
+**Discord** の場合: Developer Portal で Bot を作成し Bot Token を取得。
+**Privileged Gateway Intents の「MESSAGE CONTENT INTENT」を ON**（本文取得に必須）。
+招待 URL の scope は `bot`、権限は「メッセージの送信」程度でよい。
+
+## 使い方
+
+```bash
+# ① ナレッジ取り込み（R2/S3 の .md → チャンク化 → FTS5 索引）
+bun run kb:ingest
+
+# ② 検索品質の確認（BM25 の目視）
+bun run kb:search "デプロイ先は？"
+
+# ③ Bot 起動（常駐）
+bun run start            # Slack（Socket Mode）   or: bun run dev
+bun run start:discord    # Discord                or: bun run dev:discord
+```
+
+Slack はチャンネルでのメンションと DM、Discord はメンションと DM に反応する。
+
+## セルフホスト（Docker・常駐）
+
+Socket Mode は常時接続のため常駐プロセスが要る。コンテナ1つでどこでも（VPS / Fly.io / Railway /
+Render / ECS Fargate / 自宅サーバ）動かせるようにしてある。
+
+```bash
+cp .env.example .env   # 値を埋める
+docker compose up -d --build
+docker compose logs -f # 起動・取り込み・usage ログを確認
+```
+
+起動時に `docker-entrypoint.sh` が R2/S3 からナレッジを取り込み（`kb:ingest`）→ Bot を起動する。
+FTS インデックスは R2 から導出する派生物なので、コンテナ起動のたびに作り直してよい。
+
+- **回答キャッシュの永続**: `compose.yaml` の `kbdata` ボリュームを `/app/data` にマウントし、再起動後も残す。
+  `KB_DB_PATH` は compose で `/app/data/kb.sqlite` に固定（`.env` の値より優先）。
+- **起動時取り込みのスキップ**: 永続インデックスを使い回す等で取り込み不要なら `KB_INGEST_ON_BOOT=false`。
+- **ナレッジ更新の反映**: R2 の md を更新したら `docker compose restart`（再起動時に再取り込み）。
+- **プラットフォーム切替**: `KB_PLATFORM=slack`（既定）/ `discord`。Discord で常駐するなら `.env` で
+  `KB_PLATFORM=discord` と `DISCORD_BOT_TOKEN` を設定。両方を同時に常駐させたい場合は、compose の
+  サービスを2つ（`KB_PLATFORM` 違い）に分ければよい。
+
+### プロバイダ別メモ
+
+- **VPS / 自宅サーバ**: 上記 compose をそのまま。最も手軽。
+- **Fly.io**: 同じイメージを `fly launch`（`fly.toml` で `[mounts]` を `/app/data` に割り当てるとキャッシュ永続）。
+- **AWS**: 常駐の性質上 **ECS Fargate(1タスク)** が素直。最安は **EC2 t4g.nano**、定額の楽さなら **Lightsail**。
+  **Lambda は不可**（常時 WebSocket を保持できない）。Fargate の揮発 FS では回答キャッシュは EFS か再温めで対応。
+
+## 構成
+
+```
+src/
+  config.ts        環境変数の読み出し
+  s3.ts            R2/S3 アクセス（aws4fetch・list/get）
+  kb/
+    chunk.ts       見出し階層を保つ Markdown チャンク分割
+    segment.ts     TinySegmenter 形態素分割（索引/検索）
+    db.ts          FTS5(unicode61) 索引・BM25 検索
+    ingest.ts      取り込みジョブ
+  cache.ts         回答キャッシュ（SQLite）
+  agent/
+    agent.ts       tool use ループ（streaming・cache・usage）
+    tools.ts       search_knowledge ツール
+  chat/
+    core.ts        プラットフォーム非依存の回答コア（answer / ChatReply）
+    slack.ts       Slack 用 ChatReply 実装（postMessage / update）
+    discord.ts     Discord 用 ChatReply 実装（send / edit・2000字分割）
+  index.ts         Slack(Bolt, Socket Mode) エントリ＝配線のみ
+  discord.ts       Discord(discord.js) エントリ＝配線のみ
+scripts/
+  kb-ingest.ts / kb-search.ts   CLI
+Dockerfile             bun ベースの実行イメージ
+docker-entrypoint.sh   起動時に取り込み→Bot 起動
+compose.yaml           セルフホスト用の最小構成（永続ボリューム付き）
+```
+
+## ライセンス
+
+[MIT](LICENSE)
