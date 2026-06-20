@@ -28,8 +28,14 @@ cp .env.example .env   # fill in the values (S3/R2, Slack/Discord, Anthropic)
 ```
 
 **Slack:** enable Socket Mode → obtain an App-Level Token (`connections:write`) and a Bot Token.
-Bot Token Scopes: `app_mentions:read` `chat:write` `im:history` `im:read`.
+Bot Token Scopes: `app_mentions:read` `chat:write` `im:history` `im:read` `channels:history`
+(`channels:history` lets it read a thread's earlier messages for follow-up context; add
+`groups:history` / `mpim:history` if you use it in private or group-DM channels).
 Subscribe to bot events: `app_mention`, `message.im`.
+
+**Conversation memory:** in a thread, mention the bot again to ask a follow-up — it reads the
+thread's earlier messages so "what about the line numbers?" works. DMs are continuous conversations.
+New top-level questions stay independent (and cacheable); follow-ups with context skip the cache.
 
 **Discord:** create a Bot in the Developer Portal and obtain its Bot Token.
 **Enable the "MESSAGE CONTENT INTENT"** under Privileged Gateway Intents (required to read message text).

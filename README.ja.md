@@ -28,8 +28,14 @@ cp .env.example .env   # 値を埋める（S3/R2・Slack・Anthropic）
 ```
 
 **Slack** の場合: Socket Mode を有効化 → App-Level Token（`connections:write`）と Bot Token を取得。
-Bot Token Scopes: `app_mentions:read` `chat:write` `im:history` `im:read`。
+Bot Token Scopes: `app_mentions:read` `chat:write` `im:history` `im:read` `channels:history`
+（`channels:history` はスレッドの過去発言を読み追撃質問の文脈にするため。private/グループDMで使うなら
+`groups:history` / `mpim:history` も）。
 イベント購読（Subscribe to bot events）: `app_mention`、`message.im`。
+
+**会話メモリ**: スレッド内で再度メンションして追撃すると、そのスレッドの過去発言を読むので
+「さっきの行番号は？」のような質問が通る。DM は連続会話として扱う。新規の単発質問は独立（キャッシュ対象）、
+文脈付きの追撃はキャッシュをスキップする。
 
 **Discord** の場合: Developer Portal で Bot を作成し Bot Token を取得。
 **Privileged Gateway Intents の「MESSAGE CONTENT INTENT」を ON**（本文取得に必須）。
