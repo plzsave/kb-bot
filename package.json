@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Slack ナレッジ Bot（mdcollab の AI エージェント流用）。R2/S3 の md と GitHub を低コストで解説する。",
+  "description": "Slack/Discord ナレッジ Bot。R2/S3 の md と GitHub 実コードを根拠に、低コストで仕様・使い方を解説する。",
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun --watch run src/index.ts",

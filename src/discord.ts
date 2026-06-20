@@ -5,6 +5,7 @@ import { openDb, countChunks } from "./kb/db.ts";
 import { ensureCacheTable } from "./cache.ts";
 import { answer, type AnswerDeps } from "./chat/core.ts";
 import { discordReply } from "./chat/discord.ts";
+import { loadGitHub } from "./github.ts";
 
 // Discord エントリ。プラットフォーム依存（discord.js・イベント配線）だけを持ち、
 // 回答ロジックは Slack と同じ chat/core の answer() に委譲する（コアは無改修）。
@@ -13,7 +14,8 @@ const cfg = loadDiscordConfig();
 const db = openDb(dbPath());
 ensureCacheTable(db);
 const anthropic = new Anthropic({ apiKey: cfg.anthropicApiKey });
-const deps: AnswerDeps = { db, anthropic, model: cfg.model };
+const github = loadGitHub();
+const deps: AnswerDeps = { db, anthropic, model: cfg.model, github };
 
 const client = new Client({
   // メッセージ本文の取得には MessageContent（特権インテント）が必要。
@@ -40,7 +42,10 @@ client.on(Events.MessageCreate, async (message) => {
 });
 
 client.once(Events.ClientReady, (c) => {
-  console.log(`⚡️ kb-bot 起動（Discord / ${c.user.tag} / model=${cfg.model} / 索引チャンク=${countChunks(db)}）`);
+  console.log(
+    `⚡️ kb-bot 起動（Discord / ${c.user.tag} / model=${cfg.model} / 索引チャンク=${countChunks(db)} / ` +
+      `GitHub=${github ? github.repos.join(",") : "off"}）`,
+  );
 });
 
 await client.login(cfg.discordBotToken);

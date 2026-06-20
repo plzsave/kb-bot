@@ -1,6 +1,8 @@
 # kb-bot
 
-Slack / Discord 両対応のナレッジ Bot。R2/S3 の Markdown と GitHub 管理アプリの使い方を、低コストで解説する。
+Slack / Discord 両対応のナレッジ Bot。R2/S3 の Markdown を低コストで解説し、
+**ドキュメントは陳腐化するため、GitHub の実コードを読んで仕様・挙動・使い方を**
+（ファイルパスと行番号を引用して）説明できる。
 mdcollab の AI エージェント（ネイティブ tool use・プロンプトキャッシュ・usage 計測）の設計を流用。
 
 回答ロジック（`src/chat/core.ts`）はプラットフォーム非依存で、Slack / Discord はアダプタ
@@ -32,6 +34,18 @@ Bot Token Scopes: `app_mentions:read` `chat:write` `im:history` `im:read`。
 **Discord** の場合: Developer Portal で Bot を作成し Bot Token を取得。
 **Privileged Gateway Intents の「MESSAGE CONTENT INTENT」を ON**（本文取得に必須）。
 招待 URL の scope は `bot`、権限は「メッセージの送信」程度でよい。
+
+**GitHub（任意・「実コードで仕様を語る」機能）**: `KB_GITHUB_REPOS` に参照を許可するリポを
+`owner/name` のカンマ区切りで設定。private リポや code search には `GITHUB_TOKEN`（Contents read-only の
+fine-grained PAT を対象リポに限定）が要る。public リポなら tree/read はトークン無しでも動く。
+
+## 実コードを真実として仕様を語る
+
+ドキュメントはズレるが、コードはズレない。`KB_GITHUB_REPOS` を設定すると、エージェントに
+`list_repo_tree` / `search_repo_code` / `read_repo_file` の3ツールが付き、アプリの挙動・仕様・使い方の
+質問では **コードを真実（source of truth）** として扱うよう指示される。リポを辿って該当ファイルを読み、
+パスと行番号を引用して答える。参照は allowlist 内に限定し、秘匿ファイル（`.env`・`*.pem/key`・`secrets*`）と
+パストラバーサルは拒否する。
 
 ## 使い方
 
@@ -84,6 +98,7 @@ FTS インデックスは R2 から導出する派生物なので、コンテナ
 src/
   config.ts        環境変数の読み出し
   s3.ts            R2/S3 アクセス（aws4fetch・list/get）
+  github.ts        GitHub コードアクセス（tree/read/search・allowlist＋秘匿ガード）
   kb/
     chunk.ts       見出し階層を保つ Markdown チャンク分割
     segment.ts     TinySegmenter 形態素分割（索引/検索）
@@ -92,7 +107,8 @@ src/
   cache.ts         回答キャッシュ（SQLite）
   agent/
     agent.ts       tool use ループ（streaming・cache・usage）
-    tools.ts       search_knowledge ツール
+    tools.ts       search_knowledge ツール（R2/S3 文書の FTS）
+    githubTools.ts list_repo_tree / read_repo_file / search_repo_code
   chat/
     core.ts        プラットフォーム非依存の回答コア（answer / ChatReply）
     slack.ts       Slack 用 ChatReply 実装（postMessage / update）

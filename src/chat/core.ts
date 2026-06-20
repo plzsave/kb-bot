@@ -2,8 +2,10 @@ import type { Database } from "bun:sqlite";
 import type Anthropic from "@anthropic-ai/sdk";
 import { search } from "../kb/db.ts";
 import { getCachedAnswer, putCachedAnswer } from "../cache.ts";
-import { runAgent } from "../agent/agent.ts";
+import { runAgent, type AgentTool } from "../agent/agent.ts";
 import { searchKnowledgeTool, formatHits } from "../agent/tools.ts";
+import { githubTools } from "../agent/githubTools.ts";
+import type { GitHub } from "../github.ts";
 
 // プラットフォーム非依存の回答コア。
 // Slack/Discord などの差は ChatReply（送信と逐次更新）に閉じ込め、ここは入出力の語彙を持たない。
@@ -12,11 +14,25 @@ import { searchKnowledgeTool, formatHits } from "../agent/tools.ts";
 const TOP_K = 5; // 初期プロンプトに前置きするチャンク数
 const STREAM_THROTTLE_MS = 900; // 逐次更新の最小間隔（各プラットフォームの編集レート配慮）
 
-export const SYSTEM = `あなたは社内向けのナレッジ Bot です。
-- R2/S3 の Markdown ナレッジと GitHub 管理アプリの使い方について、簡潔・正確に日本語で答えます。
-- まず与えられた「初期コンテキスト」を読み、それで足りなければ search_knowledge ツールで追加検索します。
+// system はモデルが GitHub を持つかで変わる。コードを真実とみなす指示を GitHub 有効時に足す。
+function buildSystem(gh?: GitHub): string {
+  const base = `あなたは社内向けのナレッジ Bot です。
+- R2/S3 の Markdown ナレッジと、管理アプリの使い方・仕様について、簡潔・正確に日本語で答えます。
+- まず与えられた「初期コンテキスト」を読み、足りなければ search_knowledge ツールで追加検索します。
 - 事実が見つからない時は推測せず「ナレッジに見つかりませんでした」と述べます。
-- 回答末尾に参照した出典（ファイル名/見出し）を簡潔に挙げます。`;
+- 回答末尾に参照した出典（ファイル名/見出し、コードならパスと行番号）を簡潔に挙げます。`;
+  if (!gh) return base;
+  return (
+    base +
+    `\n\n【重要】アプリの仕様・挙動・使い方に関する質問では、ドキュメントは陳腐化している可能性があるため
+**実コードを真実（source of truth）とみなして**ください。参照可能なリポジトリ: ${gh.repos.join(", ")}。
+list_repo_tree で構成を把握し、search_repo_code で該当箇所を探し、read_repo_file で実コードを読み、
+ファイルパスと行番号を根拠として引用して説明します。ドキュメントとコードが食い違う場合はコードを優先します。`
+  );
+}
+
+// 後方互換のための既定 system（GitHub 無効時）。
+export const SYSTEM = buildSystem();
 
 /** 1 回の発言（メッセージ）に対する返信ハンドル。send で起票し、返る handle を update で書き換える。 */
 export interface ReplyHandle {
@@ -34,13 +50,15 @@ export interface AnswerDeps {
   db: Database;
   anthropic: Anthropic;
   model: string;
+  /** 設定されていれば GitHub コード参照ツールを有効化する（実コードで仕様を語る）。 */
+  github?: GitHub;
 }
 
 /** 質問テキストを受け、reply 経由で回答する（プラットフォーム非依存）。 */
 export async function answer(question: string, reply: ChatReply, deps: AnswerDeps): Promise<void> {
   const q = question.trim();
   if (!q) return;
-  const { db, anthropic, model } = deps;
+  const { db, anthropic, model, github } = deps;
 
   // ① 回答キャッシュ（完全一致）→ ヒットなら LLM を呼ばない＝最大の節約
   const cached = getCachedAnswer(db, q);
@@ -58,6 +76,9 @@ export async function answer(question: string, reply: ChatReply, deps: AnswerDep
   const initialPrompt = `# 初期コンテキスト（FTS検索の上位${hits.length}件）\n\n${formatHits(hits)}\n\n# 質問\n${q}`;
 
   // ③ エージェント実行（既定 Haiku・プロンプトキャッシュ・tool use）。逐次更新。
+  // GitHub が有効ならコード参照ツールを足す（実コードで仕様を語る）。
+  const tools: AgentTool[] = [searchKnowledgeTool(db), ...(github ? githubTools(github) : [])];
+
   let lastEdit = 0;
   let pending = "";
   const flush = async (force: boolean) => {
@@ -70,9 +91,11 @@ export async function answer(question: string, reply: ChatReply, deps: AnswerDep
   const result = await runAgent({
     client: anthropic,
     model,
-    system: SYSTEM,
+    system: buildSystem(github),
     messages: [{ role: "user", content: initialPrompt }],
-    tools: [searchKnowledgeTool(db)],
+    tools,
+    // コード探索は tree→search→read と手数が要るので GitHub 有効時はターン上限を緩める。
+    maxTurns: github ? 8 : undefined,
     onDelta: (t) => {
       pending += t;
       void flush(false);
