@@ -6,8 +6,11 @@ import { ensureCacheTable } from "./cache.ts";
 import { answer, type AnswerDeps, type HistoryTurn } from "./chat/core.ts";
 import { slackReply } from "./chat/slack.ts";
 import { loadGitHub } from "./github.ts";
+import { InFlightGuard } from "./inflight.ts";
+import { startHeartbeat } from "./heartbeat.ts";
 
 const HISTORY_LIMIT = 12; // 会話メモリに含める直近メッセージ数の上限
+const guard = new InFlightGuard(); // 同一ユーザーの多重実行を防ぐ
 
 // Slack のメッセージ列を会話履歴に変換（プレースホルダ/空/現在の発言は除外）。
 function toHistory(messages: any[], botUserId: string | undefined, skipTs?: string): HistoryTurn[] {
@@ -52,7 +55,13 @@ app.event("app_mention", async ({ event, client, context }) => {
       /* 履歴取得失敗（scope 不足等）は無視して単発回答にフォールバック */
     }
   }
-  await answer(text, slackReply(client, event.channel, event.thread_ts ?? event.ts), deps, history);
+  const user = event.user ?? event.channel;
+  if (!guard.tryAcquire(user)) return; // 前の質問を処理中なら無視
+  try {
+    await answer(text, slackReply(client, event.channel, event.thread_ts ?? event.ts), deps, history);
+  } finally {
+    guard.release(user);
+  }
 });
 
 // DM（message.im）。bot 自身や編集イベントは無視。
@@ -68,10 +77,17 @@ app.message(async ({ message, client, context }) => {
   } catch {
     /* 失敗時は単発回答にフォールバック */
   }
-  await answer(m.text ?? "", slackReply(client, m.channel, m.thread_ts), deps, history);
+  const user = m.user ?? m.channel;
+  if (!guard.tryAcquire(user)) return; // 前の質問を処理中なら無視
+  try {
+    await answer(m.text ?? "", slackReply(client, m.channel, m.thread_ts), deps, history);
+  } finally {
+    guard.release(user);
+  }
 });
 
 await app.start();
+startHeartbeat(); // 死活監視（Docker HEALTHCHECK 用）
 console.log(
   `⚡️ kb-bot 起動（Slack / Socket Mode / model=${cfg.model} / 索引チャンク=${countChunks(db)} / ` +
     `GitHub=${github ? github.repos.join(",") : "off"}）`,
