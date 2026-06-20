@@ -6,8 +6,11 @@ import { ensureCacheTable } from "./cache.ts";
 import { answer, type AnswerDeps, type HistoryTurn } from "./chat/core.ts";
 import { discordReply } from "./chat/discord.ts";
 import { loadGitHub } from "./github.ts";
+import { InFlightGuard } from "./inflight.ts";
+import { startHeartbeat } from "./heartbeat.ts";
 
 const HISTORY_LIMIT = 12; // 会話メモリに含める直近メッセージ数の上限
+const guard = new InFlightGuard(); // 同一ユーザーの多重実行を防ぐ
 
 // Discord エントリ。プラットフォーム依存（discord.js・イベント配線）だけを持ち、
 // 回答ロジックは Slack と同じ chat/core の answer() に委譲する（コアは無改修）。
@@ -83,25 +86,33 @@ client.on(Events.MessageCreate, async (message) => {
   if (!isDM && !mentioned) return;
 
   const text = message.content.replace(/<@[!&]?\d+>/g, " ").trim(); // メンション除去
-  const history = await fetchHistory(message);
 
-  // 返信先を決める。通常チャンネルでは質問ごとにスレッドを作り、その中で回答（Slack 同等）。
-  // DM / 既にスレッド内 ならそのまま。スレッド作成不可（権限等）は通常チャンネルにフォールバック。
-  let target: any = message.channel;
-  const ch: any = message.channel;
-  const inThread = typeof ch.isThread === "function" && ch.isThread();
-  if (!isDM && !inThread && typeof message.startThread === "function") {
-    try {
-      target = await message.startThread({ name: threadName(text), autoArchiveDuration: 1440 });
-    } catch {
-      target = message.channel; // 公開スレッド作成権限が無い等は通常送信に戻す
+  const user = message.author.id;
+  if (!guard.tryAcquire(user)) return; // 前の質問を処理中なら無視
+  try {
+    const history = await fetchHistory(message);
+
+    // 返信先を決める。通常チャンネルでは質問ごとにスレッドを作り、その中で回答（Slack 同等）。
+    // DM / 既にスレッド内 ならそのまま。スレッド作成不可（権限等）は通常チャンネルにフォールバック。
+    let target: any = message.channel;
+    const ch: any = message.channel;
+    const inThread = typeof ch.isThread === "function" && ch.isThread();
+    if (!isDM && !inThread && typeof message.startThread === "function") {
+      try {
+        target = await message.startThread({ name: threadName(text), autoArchiveDuration: 1440 });
+      } catch {
+        target = message.channel; // 公開スレッド作成権限が無い等は通常送信に戻す
+      }
     }
-  }
 
-  await answer(text, discordReply(target), deps, history);
+    await answer(text, discordReply(target), deps, history);
+  } finally {
+    guard.release(user);
+  }
 });
 
 client.once(Events.ClientReady, (c) => {
+  startHeartbeat(); // 死活監視（Docker HEALTHCHECK 用）
   console.log(
     `⚡️ kb-bot 起動（Discord / ${c.user.tag} / model=${cfg.model} / 索引チャンク=${countChunks(db)} / ` +
       `GitHub=${github ? github.repos.join(",") : "off"}）`,
