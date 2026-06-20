@@ -29,3 +29,17 @@ test("コードフェンス内は変換しない", () => {
 test("インラインコード内は変換しない", () => {
   expect(toSlackMrkdwn("`**x**` と **y**")).toBe("`**x**` と *y*");
 });
+
+test("不揃いなアスタリスク（**x* / *x**）も * に寄せる", () => {
+  expect(toSlackMrkdwn("**設定します*。")).toBe("*設定します*。");
+  expect(toSlackMrkdwn("*設定方法:**")).toBe("*設定方法:*");
+});
+
+test("*** (太字斜体) も * に寄せる", () => {
+  expect(toSlackMrkdwn("***重要***")).toBe("*重要*");
+});
+
+test("アンダースコア（Python ダンダー等）は壊さない", () => {
+  expect(toSlackMrkdwn("src/mailprobe/__main__.py を参照")).toBe("src/mailprobe/__main__.py を参照");
+  expect(toSlackMrkdwn("config.token_path")).toBe("config.token_path");
+});
