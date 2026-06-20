@@ -12,9 +12,14 @@ test("2000 字超は各 2000 字以内に分割する", () => {
   expect(chunks.every((c) => c.length <= 2000)).toBe(true);
 });
 
-test("標準 Markdown（太字・箇条書き・見出し）は維持する", () => {
-  const md = "# 見出し\n\n- **太字**";
+test("標準 Markdown（太字・箇条書き・###まで見出し）は維持する", () => {
+  const md = "# 見出し\n\n### 小見出し\n\n- **太字**";
   expect(toDiscordMarkdown(md)).toBe(md);
+});
+
+test("#### 以降の見出しは太字に倒す（Discord は ### まで）", () => {
+  expect(toDiscordMarkdown("#### 1. 基本")).toBe("**1. 基本**");
+  expect(toDiscordMarkdown("###### 深い見出し")).toBe("**深い見出し**");
 });
 
 test("水平線は区切り線に置換する", () => {

@@ -7,8 +7,9 @@ import type { ChatReply, ReplyHandle } from "./core.ts";
 const MAX = 2000;
 const HR = "──────────";
 
-// Discord は標準 Markdown の大半（**太字**・箇条書き・> 引用・# 見出し・コード）をそのまま描画するので、
-// Discord で効かないものだけ最小限に整形する。```fence``` と `inline code` は変換しない。
+// Discord は標準 Markdown の大半（**太字**・箇条書き・> 引用・コード）をそのまま描画するが、
+// 見出しは #〜###（3 段階）まで・水平線やマスクリンクは非対応。効かないものだけ最小限に整形する。
+// ```fence``` と `inline code` は変換しない。
 export function toDiscordMarkdown(md: string): string {
   return md
     .split(/(```[\s\S]*?```)/g)
@@ -22,6 +23,9 @@ function convertSegment(s: string): string {
     .map((line) => {
       // 水平線（---, ***, ___）はそのまま文字で出てしまうので区切り線に置換
       if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) return HR;
+      // Discord の見出しは ### まで。#### 以降は描画されず文字で出るので太字に倒す。
+      const h = line.match(/^#{4,}\s+(.*)$/);
+      if (h) return convertInline(`**${h[1]}**`);
       return convertInline(line);
     })
     .join("\n");
