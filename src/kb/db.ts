@@ -49,12 +49,24 @@ export function countChunks(db: Database): number {
 export function search(db: Database, rawQuery: string, limit = 5): SearchHit[] {
   const match = buildMatchQuery(rawQuery);
   if (!match) return [];
-  return db
+  const rows = db
     .query(
       `SELECT doc_key AS docKey, heading, ord, body AS text, bm25(chunks) AS score
        FROM chunks WHERE chunks MATCH ? ORDER BY score ASC LIMIT ?`,
     )
     .all(match, limit) as SearchHit[];
+  return dropWeakHits(rows);
+}
+
+// OR 一致は一般語（「手順」等）で無関係チャンクも拾うため、末尾の極端に弱いヒットを落とす。
+// 最上位は必ず残し、bm25 スコアの絶対値が最上位の RATIO 未満のものだけ除外する（安全側・コーパス非依存）。
+const WEAK_RATIO = 0.1;
+export function dropWeakHits(hits: SearchHit[], ratio = WEAK_RATIO): SearchHit[] {
+  if (hits.length <= 1) return hits;
+  const best = Math.abs(hits[0]!.score); // bm25 は負・絶対値が大きいほど良い
+  if (best === 0) return hits;
+  const cutoff = best * ratio;
+  return hits.filter((h, i) => i === 0 || Math.abs(h.score) >= cutoff);
 }
 
 // 問い合わせ文を FTS5 クエリ式へ。内容語をフレーズ化して OR で結ぶ（再帰率重視・BM25 で順位付け）。
