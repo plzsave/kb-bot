@@ -134,28 +134,39 @@ export async function answer(
     { role: "user", content: initialPrompt },
   ];
 
-  const result = await runAgent({
-    client: anthropic,
-    model,
-    system: buildSystem(github),
-    messages,
-    tools,
-    // コード探索は tree→search→read と手数が要るので GitHub 有効時はターン上限を緩める。
-    maxTurns: github ? 8 : undefined,
-    onDelta: (t) => {
-      pending += t;
-      void flush(false);
-    },
-  });
+  // LLM 呼び出しは失敗しうる（レート制限・ネットワーク・キー不正等）。失敗時に「考え中…」のまま
+  // 固まる/未処理例外で落ちることを防ぎ、プレースホルダをエラー文言に置き換える。
+  try {
+    const result = await runAgent({
+      client: anthropic,
+      model,
+      system: buildSystem(github),
+      messages,
+      tools,
+      // コード探索は tree→search→read と手数が要るので GitHub 有効時はターン上限を緩める。
+      maxTurns: github ? 8 : undefined,
+      onDelta: (t) => {
+        pending += t;
+        void flush(false);
+      },
+    });
 
-  const finalText = result.text.trim() || "（回答を生成できませんでした）";
-  await handle.update(finalText);
+    const finalText = result.text.trim() || "（回答を生成できませんでした）";
+    await handle.update(finalText);
 
-  // ④ キャッシュ保存＋使用量ログ（truncated は不完全・文脈ありは再利用不可なのでキャッシュしない）
-  if (!hasContext && !result.truncated && result.text.trim()) putCachedAnswer(db, q, finalText);
-  const u = result.usage;
-  console.log(
-    `[usage] model=${model} tools=${result.toolsUsed.join(",") || "-"} ` +
-      `in=${u.input} out=${u.output} cacheRead=${u.cacheRead} cacheCreate=${u.cacheCreation} truncated=${result.truncated}`,
-  );
+    // ④ キャッシュ保存＋使用量ログ（truncated は不完全・文脈ありは再利用不可なのでキャッシュしない）
+    if (!hasContext && !result.truncated && result.text.trim()) putCachedAnswer(db, q, finalText);
+    const u = result.usage;
+    console.log(
+      `[usage] model=${model} tools=${result.toolsUsed.join(",") || "-"} ` +
+        `in=${u.input} out=${u.output} cacheRead=${u.cacheRead} cacheCreate=${u.cacheCreation} truncated=${result.truncated}`,
+    );
+  } catch (e) {
+    console.error("[answer] エラー:", e);
+    try {
+      await handle.update("⚠️ 回答の生成中にエラーが発生しました。少し時間をおいて、もう一度お試しください。");
+    } catch {
+      /* 通知メッセージの更新自体が失敗した場合は諦める */
+    }
+  }
 }
