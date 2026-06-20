@@ -39,7 +39,9 @@ New top-level questions stay independent (and cacheable); follow-ups with contex
 
 **Discord:** create a Bot in the Developer Portal and obtain its Bot Token.
 **Enable the "MESSAGE CONTENT INTENT"** under Privileged Gateway Intents (required to read message text).
-Invite the bot with the `bot` scope and the "Send Messages" permission.
+Invite the bot with the `bot` scope and these permissions: **Send Messages, Create Public Threads,
+Send Messages in Threads, Read Message History** (in a channel the bot opens a thread per question
+and answers there; thread/DM follow-ups carry context, like Slack).
 
 **GitHub (optional, "explain specs from real code"):** set `KB_GITHUB_REPOS` to a comma-separated
 allowlist (`owner/name`). For private repos or code search, add a `GITHUB_TOKEN` (a fine-grained PAT

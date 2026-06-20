@@ -39,7 +39,9 @@ Bot Token Scopes: `app_mentions:read` `chat:write` `im:history` `im:read` `chann
 
 **Discord** の場合: Developer Portal で Bot を作成し Bot Token を取得。
 **Privileged Gateway Intents の「MESSAGE CONTENT INTENT」を ON**（本文取得に必須）。
-招待 URL の scope は `bot`、権限は「メッセージの送信」程度でよい。
+招待 URL の scope は `bot`、権限は **メッセージの送信 / 公開スレッドの作成 / スレッドでメッセージ送信 /
+メッセージ履歴の読み取り**。通常チャンネルでは質問ごとにスレッドを作ってそこで回答し、スレッド/DM の
+追撃は文脈を引き継ぐ（Slack と同等）。
 
 **GitHub（任意・「実コードで仕様を語る」機能）**: `KB_GITHUB_REPOS` に参照を許可するリポを
 `owner/name` のカンマ区切りで設定。private リポや code search には `GITHUB_TOKEN`（Contents read-only の

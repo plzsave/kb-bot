@@ -51,6 +51,12 @@ async function fetchHistory(message: any): Promise<HistoryTurn[]> {
   }
 }
 
+// スレッド名は 1〜100 文字。質問文を短く使い、空なら既定名。
+function threadName(text: string): string {
+  const t = text.replace(/\s+/g, " ").trim().slice(0, 80);
+  return t || "質問";
+}
+
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return; // bot 自身・他 bot は無視
 
@@ -61,7 +67,21 @@ client.on(Events.MessageCreate, async (message) => {
 
   const text = message.content.replace(/<@!?\d+>/g, " ").trim(); // メンション除去
   const history = await fetchHistory(message);
-  await answer(text, discordReply(message.channel), deps, history);
+
+  // 返信先を決める。通常チャンネルでは質問ごとにスレッドを作り、その中で回答（Slack 同等）。
+  // DM / 既にスレッド内 ならそのまま。スレッド作成不可（権限等）は通常チャンネルにフォールバック。
+  let target: any = message.channel;
+  const ch: any = message.channel;
+  const inThread = typeof ch.isThread === "function" && ch.isThread();
+  if (!isDM && !inThread && typeof message.startThread === "function") {
+    try {
+      target = await message.startThread({ name: threadName(text), autoArchiveDuration: 1440 });
+    } catch {
+      target = message.channel; // 公開スレッド作成権限が無い等は通常送信に戻す
+    }
+  }
+
+  await answer(text, discordReply(target), deps, history);
 });
 
 client.once(Events.ClientReady, (c) => {
