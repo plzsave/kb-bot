@@ -34,7 +34,10 @@ function convertLine(line: string): string {
 }
 
 function convertInline(text: string): string {
-  // `inline code` を温存しつつ、リンク・太字・打消しを mrkdwn へ
+  // `inline code` を温存しつつ、リンク・太字・打消しを mrkdwn へ。
+  // Slack の太字は * 一個。モデルは ** と * を不揃いに混ぜることがある（**x* や *x**）ので、
+  // 対の検出はやめて「2 個以上連続するアスタリスクは * に寄せる」＝不揃いでも崩れない。
+  // アンダースコアは Python のダンダー（__main__.py 等）を壊さないよう一切触らない。
   return text
     .split(/(`[^`]+`)/g)
     .map((seg, i) =>
@@ -42,9 +45,8 @@ function convertInline(text: string): string {
         ? seg
         : seg
             .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "<$2|$1>") // [t](u) -> <u|t>
-            .replace(/\*\*([\s\S]+?)\*\*/g, "*$1*") // **太字** -> *太字*（改行跨ぎ可・最短一致）
-            .replace(/__([\s\S]+?)__/g, "*$1*") // __太字__ -> *太字*
-            .replace(/~~([\s\S]+?)~~/g, "~$1~"), // ~~打消し~~ -> ~打消し~
+            .replace(/\*{2,}/g, "*") // ** / *** / 不揃いな ** を Slack の * に統一
+            .replace(/~{2,}/g, "~"), // ~~打消し~~ -> ~打消し~
     )
     .join("");
 }
