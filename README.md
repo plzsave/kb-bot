@@ -145,6 +145,11 @@ bun test            # unit tests (pure functions; no credentials needed)
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow and
 [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
 
+## For end users
+
+A plain-language guide for non-engineers (how to ask, automatic doc-vs-code routing,
+reading sources, follow-ups, behavior when nothing is found): **[docs/USAGE.ja.md](docs/USAGE.ja.md)** (Japanese).
+
 ## License
 
 [MIT](LICENSE)
