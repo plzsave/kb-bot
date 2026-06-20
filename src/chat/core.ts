@@ -19,6 +19,8 @@ function buildSystem(gh?: GitHub): string {
   const base = `あなたは社内向けのナレッジ Bot です。
 - R2/S3 の Markdown ナレッジと、管理アプリの使い方・仕様について、簡潔・正確に日本語で答えます。
 - まず与えられた「初期コンテキスト」を読み、足りなければ search_knowledge ツールで追加検索します。
+- 【参照先の振り分け】「手順・運用・決まり事・用語の定義」は R2/S3 ドキュメント（search_knowledge）、
+  「実装・挙動・仕様の詳細・なぜそう動くか」は GitHub の実コードを優先します。判断に迷えば両方参照します。
 - 事実が見つからない時は推測せず「ナレッジに見つかりませんでした」と述べます。
 - 【出力スタイル】検索や読み込みの途中経過・実況（「〜を確認します」「見つかりませんでした、次は…」等）は
   書かないでください。最終的な答えだけを、結論から簡潔に提示します。
@@ -52,6 +54,12 @@ export interface ChatReply {
   send(text: string): Promise<ReplyHandle>;
 }
 
+/** スレッド/DM の過去発言（会話メモリ）。プラットフォーム側が取得して渡す。 */
+export interface HistoryTurn {
+  role: "user" | "assistant";
+  text: string;
+}
+
 export interface AnswerDeps {
   db: Database;
   anthropic: Anthropic;
@@ -60,17 +68,43 @@ export interface AnswerDeps {
   github?: GitHub;
 }
 
-/** 質問テキストを受け、reply 経由で回答する（プラットフォーム非依存）。 */
-export async function answer(question: string, reply: ChatReply, deps: AnswerDeps): Promise<void> {
+// Anthropic は user/assistant の交互かつ user 始まりを要求するため、履歴を正規化する。
+// 連続する同一ロールは結合し、先頭の assistant は落とす。
+export function normalizeHistory(history: HistoryTurn[]): Anthropic.MessageParam[] {
+  const out: Anthropic.MessageParam[] = [];
+  for (const turn of history) {
+    if (!turn.text.trim()) continue;
+    const last = out[out.length - 1];
+    if (last && last.role === turn.role) {
+      last.content = `${last.content}\n\n${turn.text}`;
+    } else {
+      out.push({ role: turn.role, content: turn.text });
+    }
+  }
+  while (out.length && out[0]!.role === "assistant") out.shift();
+  return out;
+}
+
+/** 質問テキストを受け、reply 経由で回答する（プラットフォーム非依存）。history はスレッド文脈（任意）。 */
+export async function answer(
+  question: string,
+  reply: ChatReply,
+  deps: AnswerDeps,
+  history: HistoryTurn[] = [],
+): Promise<void> {
   const q = question.trim();
   if (!q) return;
   const { db, anthropic, model, github } = deps;
+  const hasContext = history.length > 0;
 
-  // ① 回答キャッシュ（完全一致）→ ヒットなら LLM を呼ばない＝最大の節約
-  const cached = getCachedAnswer(db, q);
-  if (cached) {
-    await reply.send(`${cached}\n\n_（キャッシュ応答）_`);
-    return;
+  // ① 回答キャッシュ（完全一致）→ ヒットなら LLM を呼ばない＝最大の節約。
+  //    ただし会話の続き（文脈あり）は同じ問い文でも答えが変わるためキャッシュしない。
+  if (!hasContext) {
+    const cached = getCachedAnswer(db, q);
+    if (cached) {
+      await reply.send(`${cached}\n\n_（キャッシュ応答）_`);
+      return;
+    }
   }
 
   // プレースホルダを起票し、以降この handle を書き換えていく
@@ -94,11 +128,17 @@ export async function answer(question: string, reply: ChatReply, deps: AnswerDep
     if (pending.trim()) await handle.update(pending);
   };
 
+  // スレッド/DM の過去発言を会話履歴として前置きし、今回の質問を最後に積む。
+  const messages: Anthropic.MessageParam[] = [
+    ...normalizeHistory(history),
+    { role: "user", content: initialPrompt },
+  ];
+
   const result = await runAgent({
     client: anthropic,
     model,
     system: buildSystem(github),
-    messages: [{ role: "user", content: initialPrompt }],
+    messages,
     tools,
     // コード探索は tree→search→read と手数が要るので GitHub 有効時はターン上限を緩める。
     maxTurns: github ? 8 : undefined,
@@ -111,8 +151,8 @@ export async function answer(question: string, reply: ChatReply, deps: AnswerDep
   const finalText = result.text.trim() || "（回答を生成できませんでした）";
   await handle.update(finalText);
 
-  // ④ キャッシュ保存＋使用量ログ（truncated 時は不完全なのでキャッシュしない）
-  if (!result.truncated && result.text.trim()) putCachedAnswer(db, q, finalText);
+  // ④ キャッシュ保存＋使用量ログ（truncated は不完全・文脈ありは再利用不可なのでキャッシュしない）
+  if (!hasContext && !result.truncated && result.text.trim()) putCachedAnswer(db, q, finalText);
   const u = result.usage;
   console.log(
     `[usage] model=${model} tools=${result.toolsUsed.join(",") || "-"} ` +
