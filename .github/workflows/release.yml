@@ -17,7 +17,7 @@ jobs:
       contents: read
       packages: write # GHCR への push に必要
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: docker/setup-qemu-action@v3 # arm64 ビルド用
       - uses: docker/setup-buildx-action@v3
