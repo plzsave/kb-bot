@@ -31,19 +31,36 @@ const client = new Client({
   partials: [Partials.Channel],
 });
 
+// 1 メッセージを履歴ターンへ（bot 自身は assistant・空/プレースホルダは除外）。
+function toTurn(m: any): HistoryTurn | null {
+  const text = (m.content ?? "").replace(/<@!?\d+>/g, " ").trim();
+  if (!text || text === "考え中… ⏳") return null;
+  return { role: m.author?.id === client.user?.id ? "assistant" : "user", text };
+}
+
 // DM / スレッドの直近メッセージを会話メモリにする（通常チャンネルは雑多なので対象外）。
 async function fetchHistory(message: any): Promise<HistoryTurn[]> {
   const ch = message.channel;
-  const eligible = message.guild === null || (typeof ch.isThread === "function" && ch.isThread());
+  const isThread = typeof ch.isThread === "function" && ch.isThread();
+  const eligible = message.guild === null || isThread;
   if (!eligible) return [];
   try {
-    const fetched = await ch.messages.fetch({ limit: 30, before: message.id });
-    const arr = [...fetched.values()].reverse(); // 古い順
     const turns: HistoryTurn[] = [];
-    for (const m of arr) {
-      const text = (m.content ?? "").replace(/<@!?\d+>/g, " ").trim();
-      if (!text || text === "考え中… ⏳") continue;
-      turns.push({ role: m.author.id === client.user?.id ? "assistant" : "user", text });
+    // スレッドの「開始メッセージ（元質問）」は親チャンネル側にあり、スレッドの一覧に含まれない。
+    // これを先頭に補わないと、スレッド内には bot の回答(assistant)しか無く文脈が空になる。
+    if (isThread && typeof ch.fetchStarterMessage === "function") {
+      try {
+        const starter = await ch.fetchStarterMessage();
+        const t = starter ? toTurn(starter) : null;
+        if (t) turns.push(t);
+      } catch {
+        /* スターターメッセージが取得できない場合は無視 */
+      }
+    }
+    const fetched = await ch.messages.fetch({ limit: 30, before: message.id });
+    for (const m of [...fetched.values()].reverse()) {
+      const t = toTurn(m);
+      if (t) turns.push(t);
     }
     return turns.slice(-HISTORY_LIMIT);
   } catch {
