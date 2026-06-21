@@ -13,8 +13,8 @@ practical, coordinating disclosure with you.
 
 ## Handling secrets
 
-This bot needs several secrets at runtime (Slack/Discord tokens, an Anthropic API key, and
-S3/R2 credentials). To keep them safe:
+This bot needs several secrets at runtime (Slack/Discord tokens, the selected LLM provider's API
+key — Anthropic / Gemini / OpenAI — and S3/R2 credentials). To keep them safe:
 
 - Secrets are read only from environment variables / `.env`. `.env` is git-ignored and excluded
   from the Docker image via `.dockerignore` — never commit it.

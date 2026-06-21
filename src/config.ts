@@ -39,17 +39,20 @@ export interface BotConfig {
   slackAppToken: string;
   /** 選択中の LLM プロバイダ（KB_LLM_PROVIDER）。 */
   provider: LlmProvider;
-  /** 解決済みモデル。コスト優先で各社最安ティア。難問だけ KB_MODEL で上位へ。 */
+  /** 解決済みの基本モデル。コスト優先で各社最安ティア（KB_MODEL）。 */
   model: string;
+  /** 難問昇格先モデル（KB_MODEL_HARD）。未設定なら昇格無効。 */
+  modelHard: string | undefined;
 }
 
 export function loadBotConfig(): BotConfig {
-  const { provider, model } = createLlm();
+  const { provider, model, modelHard } = createLlm();
   return {
     slackBotToken: required("SLACK_BOT_TOKEN"),
     slackAppToken: required("SLACK_APP_TOKEN"),
     provider,
     model,
+    modelHard,
   };
 }
 
@@ -87,13 +90,16 @@ export interface DiscordConfig {
   discordBotToken: string;
   provider: LlmProvider;
   model: string;
+  /** 難問昇格先モデル（KB_MODEL_HARD）。未設定なら昇格無効。 */
+  modelHard: string | undefined;
 }
 
 export function loadDiscordConfig(): DiscordConfig {
-  const { provider, model } = createLlm();
+  const { provider, model, modelHard } = createLlm();
   return {
     discordBotToken: required("DISCORD_BOT_TOKEN"),
     provider,
     model,
+    modelHard,
   };
 }
