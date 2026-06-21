@@ -8,7 +8,10 @@ import { createOpenAiProvider } from "./openai.ts";
 // 既定モデルはプロバイダ別。KB_MODEL があればそれを優先（モデルティアリング）。
 
 // 既定モデル（モデル名は外部識別子。更新時は各社の最新を確認すること）。
-// コスト優先で各社の最安ティアを既定にし、難問だけ KB_MODEL で上位へ上げる想定。
+// 既定は各社の最安ティア。日付固定スナップショットでなくエイリアスを使うことで、
+// マイナー更新に自動追従し陳腐化しにくい。基本ティアは KB_MODEL、上位ティアは KB_MODEL_HARD で上書き。
+// KB_MODEL_HARD 未設定なら難問昇格は無効（=現状互換）。具体モデル ID は env で指定し、ここには
+// 固定の上位 ID を持たない（記憶での直書き＝将来の退役で壊れるのを避ける）。
 // いずれも GA の最安ティア。確認日: 2026-06-21（gemini-3.1-flash-lite / gpt-5.4-nano）。
 const ANTHROPIC_DEFAULT_MODEL = "claude-haiku-4-5";
 const GEMINI_DEFAULT_MODEL = "gemini-3.1-flash-lite";
@@ -28,8 +31,11 @@ export function selectedProvider(): ProviderName {
   throw new Error(`unknown KB_LLM_PROVIDER: ${raw}（anthropic | gemini | openai）`);
 }
 
-/** 選択中プロバイダのアダプタと、解決済みモデル名を返す。 */
-export function createLlm(): { provider: LlmProvider; model: string } {
+/**
+ * 選択中プロバイダのアダプタと、解決済みモデル名を返す。
+ * model: 基本ティア（KB_MODEL or 各社既定）。modelHard: 難問昇格先（KB_MODEL_HARD、未設定なら undefined＝昇格無効）。
+ */
+export function createLlm(): { provider: LlmProvider; model: string; modelHard: string | undefined } {
   const name = selectedProvider();
   const provider =
     name === "gemini"
@@ -38,5 +44,6 @@ export function createLlm(): { provider: LlmProvider; model: string } {
         ? createOpenAiProvider(required("OPENAI_API_KEY"), OPENAI_DEFAULT_MODEL)
         : createAnthropicProvider(required("ANTHROPIC_API_KEY"), ANTHROPIC_DEFAULT_MODEL);
   const model = process.env.KB_MODEL?.trim() || provider.defaultModel;
-  return { provider, model };
+  const modelHard = process.env.KB_MODEL_HARD?.trim() || undefined;
+  return { provider, model, modelHard };
 }

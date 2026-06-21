@@ -20,7 +20,7 @@ const db = openDb(dbPath());
 ensureCacheTable(db);
 ensureUsageTable(db);
 const github = loadGitHub();
-const deps: AnswerDeps = { db, provider: cfg.provider, model: cfg.model, github };
+const deps: AnswerDeps = { db, provider: cfg.provider, model: cfg.model, modelHard: cfg.modelHard, github };
 
 const client = new Client({
   // メッセージ本文の取得には MessageContent（特権インテント）が必要。
@@ -114,7 +114,8 @@ client.on(Events.MessageCreate, async (message) => {
 client.once(Events.ClientReady, (c) => {
   startHeartbeat(); // 死活監視（Docker HEALTHCHECK 用）
   console.log(
-    `⚡️ kb-bot 起動（Discord / ${c.user.tag} / ${cfg.provider.name}:${cfg.model} / 索引チャンク=${countChunks(db)} / ` +
+    `⚡️ kb-bot 起動（Discord / ${c.user.tag} / ${cfg.provider.name}:${cfg.model} / 昇格=${cfg.modelHard ?? "off"} / ` +
+      `索引チャンク=${countChunks(db)} / ` +
       `GitHub=${github ? github.repos.join(",") : "off"}）`,
   );
 });

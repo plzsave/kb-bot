@@ -34,7 +34,7 @@ const db = openDb(dbPath());
 ensureCacheTable(db);
 ensureUsageTable(db);
 const github = loadGitHub();
-const deps: AnswerDeps = { db, provider: cfg.provider, model: cfg.model, github };
+const deps: AnswerDeps = { db, provider: cfg.provider, model: cfg.model, modelHard: cfg.modelHard, github };
 
 const app = new App({
   token: cfg.slackBotToken,
@@ -89,6 +89,7 @@ app.message(async ({ message, client, context }) => {
 await app.start();
 startHeartbeat(); // 死活監視（Docker HEALTHCHECK 用）
 console.log(
-  `⚡️ kb-bot 起動（Slack / Socket Mode / ${cfg.provider.name}:${cfg.model} / 索引チャンク=${countChunks(db)} / ` +
+  `⚡️ kb-bot 起動（Slack / Socket Mode / ${cfg.provider.name}:${cfg.model} / 昇格=${cfg.modelHard ?? "off"} / ` +
+    `索引チャンク=${countChunks(db)} / ` +
     `GitHub=${github ? github.repos.join(",") : "off"}）`,
 );

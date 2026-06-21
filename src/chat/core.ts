@@ -3,9 +3,10 @@ import type { LlmMessage, LlmProvider } from "../llm/provider.ts";
 import { search } from "../kb/db.ts";
 import { getCachedAnswer, putCachedAnswer } from "../cache.ts";
 import { logUsage } from "../usage.ts";
-import { runAgent, type AgentTool } from "../agent/agent.ts";
+import { runAgent, type AgentTool, type RunAgentOpts, type RunAgentResult } from "../agent/agent.ts";
 import { searchKnowledgeTool, formatHits } from "../agent/tools.ts";
 import { githubTools } from "../agent/githubTools.ts";
+import { isModelNotFoundError } from "../llm/errors.ts";
 import type { GitHub } from "../github.ts";
 
 // プラットフォーム非依存の回答コア。
@@ -66,7 +67,10 @@ export interface HistoryTurn {
 export interface AnswerDeps {
   db: Database;
   provider: LlmProvider;
+  /** 基本ティアのモデル。 */
   model: string;
+  /** 難問昇格先モデル（KB_MODEL_HARD）。未設定なら昇格無効＝常に基本ティア。 */
+  modelHard?: string;
   /** 設定されていれば GitHub コード参照ツールを有効化する（実コードで仕様を語る）。 */
   github?: GitHub;
 }
@@ -88,6 +92,26 @@ export function normalizeHistory(history: HistoryTurn[]): LlmMessage[] {
   return out;
 }
 
+// runAgent を実行し、指定モデルが 404/退役なら既定モデル（各社エイリアス＝最も生きている可能性が高い）で
+// 一度だけ再試行する。常駐中にモデルが退役しても、再起動なしに回答を継続させるための安全網。
+// 既定モデル自体が落ちている場合は再試行できないので、そのまま投げて呼び出し側のエラー処理に任せる。
+async function runAgentWithFallback(
+  opts: RunAgentOpts,
+): Promise<{ result: RunAgentResult; modelUsed: string; fellBack: boolean }> {
+  try {
+    return { result: await runAgent(opts), modelUsed: opts.model, fellBack: false };
+  } catch (e) {
+    const fallback = opts.provider.defaultModel;
+    if (isModelNotFoundError(e) && opts.model !== fallback) {
+      console.warn(
+        `[answer] モデル ${opts.model} が利用不可（退役の可能性）。既定 ${fallback} にフォールバックします。`,
+      );
+      return { result: await runAgent({ ...opts, model: fallback }), modelUsed: fallback, fellBack: true };
+    }
+    throw e;
+  }
+}
+
 /** 質問テキストを受け、reply 経由で回答する（プラットフォーム非依存）。history はスレッド文脈（任意）。 */
 export async function answer(
   question: string,
@@ -97,8 +121,10 @@ export async function answer(
 ): Promise<void> {
   const q = question.trim();
   if (!q) return;
-  const { db, provider, model, github } = deps;
+  const { db, provider, model, modelHard, github } = deps;
   const hasContext = history.length > 0;
+  // 上位ティアが基本と別物として設定されている時だけ昇格しうる（未設定/同一なら無効＝現状互換）。
+  const canEscalate = !!modelHard && modelHard !== model;
 
   // ① 回答キャッシュ（完全一致）→ ヒットなら LLM を呼ばない＝最大の節約。
   //    ただし会話の続き（文脈あり）は同じ問い文でも答えが変わるためキャッシュしない。
@@ -119,9 +145,11 @@ export async function answer(
   logUsage(db, hits.map((h) => h.docKey)); // 検索ヒットを retrieved として記録（kb-prune 用）
   const initialPrompt = `# 初期コンテキスト（FTS検索の上位${hits.length}件）\n\n${formatHits(hits)}\n\n# 質問\n${q}`;
 
-  // ③ エージェント実行（既定 Haiku・プロンプトキャッシュ・tool use）。逐次更新。
+  // ③ エージェント実行（既定は最安ティア・プロンプトキャッシュ・tool use）。逐次更新。
   // GitHub が有効ならコード参照ツールを足す（実コードで仕様を語る）。
   const tools: AgentTool[] = [searchKnowledgeTool(db), ...(github ? githubTools(github) : [])];
+  // コード探索は tree→search→read と手数が要るので GitHub 有効時はターン上限を緩める。
+  const maxTurns = github ? 8 : undefined;
 
   let lastEdit = 0;
   let pending = "";
@@ -138,22 +166,43 @@ export async function answer(
     { role: "user", content: initialPrompt },
   ];
 
-  // LLM 呼び出しは失敗しうる（レート制限・ネットワーク・キー不正等）。失敗時に「考え中…」のまま
-  // 固まる/未処理例外で落ちることを防ぎ、プレースホルダをエラー文言に置き換える。
-  try {
-    const result = await runAgent({
+  // 1 回の実行。再実行（B 昇格）時に表示が混ざらないよう逐次バッファを毎回リセットする。
+  // 整合性の肝：ここで「意図したモデル」を渡し、404/退役なら既定モデルへフォールバックする
+  // （runAgentWithFallback）。昇格＝どのティアを狙うか／フォールバック＝生きたモデルを保証、を分離する。
+  const runOnce = async (m: string): Promise<{ result: RunAgentResult; modelUsed: string; fellBack: boolean }> => {
+    pending = "";
+    lastEdit = 0;
+    return runAgentWithFallback({
       provider,
-      model,
+      model: m,
       system: buildSystem(github),
       messages,
       tools,
-      // コード探索は tree→search→read と手数が要るので GitHub 有効時はターン上限を緩める。
-      maxTurns: github ? 8 : undefined,
+      maxTurns,
       onDelta: (t) => {
         pending += t;
         void flush(false);
       },
     });
+  };
+
+  // A: 事前ヒューリスティック。GitHub 有効かつ FTS が空振り＝ナレッジに無いコード探索質問の可能性が高く、
+  //    tree→search→read と手数も要るので最初から上位ティアで始める（後追い昇格の二重課金を避ける）。
+  const startHard = canEscalate && !!github && hits.length === 0;
+
+  // LLM 呼び出しは失敗しうる（レート制限・ネットワーク・キー不正等）。失敗時に「考え中…」のまま
+  // 固まる/未処理例外で落ちることを防ぎ、プレースホルダをエラー文言に置き換える。
+  try {
+    let { result, modelUsed, fellBack } = await runOnce(startHard ? modelHard! : model);
+    let escalated = startHard;
+
+    // B: 最安で打ち切られた（ターン上限到達＝手に負えなかった）時だけ上位ティアで再実行して救済する。
+    //    「ナレッジに無い」自己申告では昇格しない（上位でも知識は増えず無駄打ちになるため）。
+    if (!startHard && canEscalate && result.truncated) {
+      escalated = true;
+      await handle.update("じっくり考え中… ⏳");
+      ({ result, modelUsed, fellBack } = await runOnce(modelHard!));
+    }
 
     const finalText = result.text.trim() || "（回答を生成できませんでした）";
     await handle.update(finalText);
@@ -162,7 +211,8 @@ export async function answer(
     if (!hasContext && !result.truncated && result.text.trim()) putCachedAnswer(db, q, finalText);
     const u = result.usage;
     console.log(
-      `[usage] model=${model} tools=${result.toolsUsed.join(",") || "-"} ` +
+      `[usage] model=${modelUsed} escalated=${escalated} fellBack=${fellBack} ` +
+        `tools=${result.toolsUsed.join(",") || "-"} ` +
         `in=${u.input} out=${u.output} cacheRead=${u.cacheRead} cacheCreate=${u.cacheCreation} truncated=${result.truncated}`,
     );
   } catch (e) {

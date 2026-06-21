@@ -11,11 +11,16 @@ adapters (`src/chat/slack.ts` / `src/chat/discord.ts`) you swap in.
 
 ## How it keeps costs low
 
-1. **Answer cache** (SQLite, exact match) — a hit skips the LLM entirely (the biggest saver).
+1. **Answer cache** (SQLite, exact match, default TTL 24h) — a hit skips the LLM entirely (the biggest
+   saver). Tune with `KB_CACHE_TTL_HOURS`, `0` = never expire. Entries expire by default so stale docs
+   don't get served forever.
 2. **FTS5/BM25 search** (`bun:sqlite` + morphological segmentation) — retrieval with zero embedding-API cost.
 3. **Prompt caching** — reuses the system prompt / tool definitions. Provider-specific but always on:
    Anthropic uses `cache_control: ephemeral`; Gemini and OpenAI cache automatically.
-4. **Model tiering** — defaults to each provider's cheapest tier; bump only when needed (`KB_MODEL`).
+4. **Model tiering (auto-escalate hard questions)** — defaults to each provider's cheapest tier
+   (`KB_MODEL`). Set `KB_MODEL_HARD` to enable escalation: **A** = code questions with no FTS hit start
+   on the higher tier; **B** = if the cheap tier gets truncated, retry on the higher tier. Ordinary
+   questions stay one cheap call, so cost is unchanged. Unset = escalation off (always the base tier).
 
 > For Japanese knowledge, FTS5 uses **TinySegmenter (morphological segmentation) + unicode61**
 > instead of `trigram`. `trigram` could not match 2-character words (e.g. 「認証」) and recall
@@ -29,8 +34,19 @@ provider's key is required (`ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `OPENAI_API
 savers are unaffected by the choice: the **answer cache** and **FTS5/BM25 search** never call an LLM
 API at all, and **prompt-cache discounts are preserved** on every provider (just expressed
 differently — explicit on Anthropic, automatic on Gemini/OpenAI). Default models are the cheapest
-tier per provider (`claude-haiku-4-5` / `gemini-3.1-flash-lite` / `gpt-5.4-nano`); override with
-`KB_MODEL` to escalate.
+tier per provider (`claude-haiku-4-5` / `gemini-3.1-flash-lite` / `gpt-5.4-nano`); set `KB_MODEL` for
+the base tier and `KB_MODEL_HARD` for the escalation target (see "How it keeps costs low" #4).
+
+### Model selection and resilience to retirement
+
+Model IDs are human-maintained **config** (pricing isn't exposed via the API, so auto-selection isn't
+possible). Two things guard against staleness/retirement:
+
+- **Use aliases**, not dated snapshots (e.g. `claude-haiku-4-5`) — they track minor updates automatically.
+- **Runtime fallback**: if a model retires mid-uptime and an LLM call 404s, the bot falls back to the
+  provider's default model on the spot and keeps answering (no restart). It's logged as
+  `[usage] ... fellBack=true`. Retirement dates are announced ahead of time, so pair this with a planned
+  `KB_MODEL` update.
 
 ## Setup
 
