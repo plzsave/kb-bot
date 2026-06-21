@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { toAnthropicMessages } from "../src/llm/anthropic.ts";
 import { toGeminiContents } from "../src/llm/gemini.ts";
+import { toResponsesInput } from "../src/llm/openai.ts";
 import type { LlmMessage } from "../src/llm/provider.ts";
 
 // 中立メッセージ → 各社ネイティブ形式の変換（純関数・ネットワーク無し）。
@@ -83,4 +84,42 @@ test("Gemini: providerMeta が無ければ thoughtSignature を付けない", ()
     { role: "assistant", content: [{ type: "tool_use", id: "c1", name: "echo", input: {} }] },
   ]);
   expect(out[0]!.parts![0]!.thoughtSignature).toBeUndefined();
+});
+
+test("OpenAI(Responses): tool_use→function_call、text は assistant メッセージに分かれる", () => {
+  const out = toResponsesInput(conversation);
+  expect(out[0]).toEqual({ role: "user", content: "質問" });
+  // assistant ターンは text メッセージと function_call アイテムに分かれる。
+  expect(out[1]).toEqual({ role: "assistant", content: "確認します" });
+  expect(out[2]).toEqual({
+    type: "function_call",
+    call_id: "call_1",
+    name: "echo",
+    arguments: '{"q":"hi"}',
+  });
+});
+
+test("OpenAI(Responses): tool_result は function_call_output として call_id で対応づけ展開", () => {
+  const out = toResponsesInput([
+    {
+      role: "user",
+      content: [
+        { type: "tool_result", toolUseId: "call_1", name: "echo", content: "r1" },
+        { type: "tool_result", toolUseId: "call_2", name: "echo", content: "r2" },
+      ],
+    },
+  ]);
+  expect(out).toEqual([
+    { type: "function_call_output", call_id: "call_1", output: "r1" },
+    { type: "function_call_output", call_id: "call_2", output: "r2" },
+  ]);
+});
+
+test("OpenAI(Responses): tool_use のみ（テキスト無し）は function_call だけ", () => {
+  const out = toResponsesInput([
+    { role: "assistant", content: [{ type: "tool_use", id: "c1", name: "echo", input: { a: 1 } }] },
+  ]);
+  expect(out).toEqual([
+    { type: "function_call", call_id: "c1", name: "echo", arguments: '{"a":1}' },
+  ]);
 });
