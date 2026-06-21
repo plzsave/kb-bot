@@ -26,6 +26,12 @@ export interface LlmToolUseBlock {
   id: string;
   name: string;
   input: unknown;
+  /**
+   * プロバイダ固有の不透明データ。次ターンの履歴へ「そのまま返さないと壊れる」もの専用。
+   * 例: Gemini 3.x は functionCall に紐づく thoughtSignature の再送を必須にする。
+   * 他プロバイダは無視する（中身に依存しない）。
+   */
+  providerMeta?: Record<string, unknown>;
 }
 
 export interface LlmToolResultBlock {

@@ -57,3 +57,30 @@ test("Gemini: role=assistant→model、functionCall/functionResponse に写す",
     response: { result: "result text" },
   });
 });
+
+test("Gemini: thoughtSignature を functionCall パートに添えて再送する（3.x 必須）", () => {
+  const out = toGeminiContents([
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          id: "call_1",
+          name: "echo",
+          input: { q: "hi" },
+          providerMeta: { thoughtSignature: "SIG_ABC" },
+        },
+      ],
+    },
+  ]);
+  const part = out[0]!.parts![0]!;
+  expect(part.thoughtSignature).toBe("SIG_ABC");
+  expect(part.functionCall).toEqual({ id: "call_1", name: "echo", args: { q: "hi" } });
+});
+
+test("Gemini: providerMeta が無ければ thoughtSignature を付けない", () => {
+  const out = toGeminiContents([
+    { role: "assistant", content: [{ type: "tool_use", id: "c1", name: "echo", input: {} }] },
+  ]);
+  expect(out[0]!.parts![0]!.thoughtSignature).toBeUndefined();
+});

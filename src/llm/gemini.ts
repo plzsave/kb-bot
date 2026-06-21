@@ -47,14 +47,18 @@ export function toGeminiContents(messages: LlmMessage[]): Content[] {
       switch (b.type) {
         case "text":
           return { text: b.text };
-        case "tool_use":
+        case "tool_use": {
+          // Gemini 3.x は functionCall の thoughtSignature を次ターンで再送しないと 400 になる。
+          const sig = b.providerMeta?.thoughtSignature;
           return {
+            ...(typeof sig === "string" ? { thoughtSignature: sig } : {}),
             functionCall: {
               id: b.id,
               name: b.name,
               args: (b.input ?? {}) as Record<string, unknown>,
             },
           };
+        }
         case "tool_result":
           return {
             functionResponse: {
@@ -96,19 +100,24 @@ export function createGeminiProvider(apiKey: string, defaultModel: string): LlmP
       let candidates = 0;
       let thoughts = 0;
 
+      // chunk.functionCalls / chunk.text のゲッターは Part の thoughtSignature を落とす（かつ
+      // 混在時に警告を出す）ため、parts を直接走査して署名ごと拾い、思考パートは本文から除く。
       for await (const chunk of stream) {
-        const delta = chunk.text;
-        if (delta) {
-          text += delta;
-          params.onText?.(delta);
-        }
-        for (const fc of chunk.functionCalls ?? []) {
-          toolUses.push({
-            type: "tool_use",
-            id: fc.id ?? `${fc.name ?? "fn"}-${toolUses.length}`,
-            name: fc.name ?? "",
-            input: fc.args ?? {},
-          });
+        for (const part of chunk.candidates?.[0]?.content?.parts ?? []) {
+          if (part.functionCall) {
+            const fc = part.functionCall;
+            toolUses.push({
+              type: "tool_use",
+              id: fc.id ?? `${fc.name ?? "fn"}-${toolUses.length}`,
+              name: fc.name ?? "",
+              input: fc.args ?? {},
+              // 次ターンで functionCall に添えて返す必要がある（Gemini 3.x 必須）。
+              ...(part.thoughtSignature ? { providerMeta: { thoughtSignature: part.thoughtSignature } } : {}),
+            });
+          } else if (part.text && !part.thought) {
+            text += part.text;
+            params.onText?.(part.text);
+          }
         }
         // usageMetadata は累積で（多くは最終チャンクに）付くため、来るたびに上書きする。
         const u = chunk.usageMetadata;
