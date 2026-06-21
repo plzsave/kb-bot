@@ -128,5 +128,94 @@ export function issueDocKey(prefix: string, repo: string, number: number): strin
 
 /** 隔離（tombstone）先キー。isStaleKey が拾えるよう _stale セグメントを含める。 */
 export function staleDocKey(prefix: string, repo: string, number: number): string {
-  return `${prefix}knowledge/_stale/github-issues/${repo.replace("/", "-")}/${number}.md`;
+  return staleKeyForKey(prefix, issueDocKey(prefix, repo, number));
+}
+
+/**
+ * 任意の知識キーを隔離先キーへ写像する（kb-prune の移動先）。
+ * `${prefix}knowledge/...` → `${prefix}knowledge/_stale/...`。
+ * これにより issue-to-kb の tombstone チェック（staleDocKey）と一致する。
+ */
+export function staleKeyForKey(prefix: string, key: string): string {
+  const head = `${prefix}knowledge/`;
+  if (key.startsWith(head)) return `${head}_stale/${key.slice(head.length)}`;
+  return `${prefix}_stale/${key.startsWith(prefix) ? key.slice(prefix.length) : key}`;
+}
+
+export interface IssueMeta {
+  source?: string;
+  issue_number?: number;
+  repo?: string;
+  closed_at?: string;
+  updated_at?: string;
+  reopened?: boolean;
+  related_files: string[];
+  labels: string[];
+}
+
+/**
+ * 先頭 YAML frontmatter を、issue-to-kb が出力する形に限定して読む（汎用 YAML ではない）。
+ * frontmatter が無ければ null（= staleness 判定スキップ。手書きナレッジ等の後方互換）。
+ */
+export function parseFrontmatter(md: string): IssueMeta | null {
+  const lines = md.split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") return null;
+  let end = -1;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i]!.trim() === "---") {
+      end = i;
+      break;
+    }
+  }
+  if (end === -1) return null;
+
+  const meta: IssueMeta = { related_files: [], labels: [] };
+  for (let i = 1; i < end; i++) {
+    const line = lines[i]!;
+    const m = line.match(/^([a-z_]+):\s*(.*)$/i);
+    if (!m) continue;
+    const key = m[1]!;
+    const val = m[2]!.trim();
+    if (key === "related_files") {
+      meta.related_files = val === "[]" || val === "" ? collectBlockList(lines, i, end) : parseFlowList(val);
+    } else if (key === "labels") {
+      meta.labels = parseFlowList(val);
+    } else if (key === "issue_number") {
+      const n = Number(val);
+      if (Number.isFinite(n)) meta.issue_number = n;
+    } else if (key === "reopened") {
+      meta.reopened = val === "true";
+    } else if (key === "source") meta.source = val;
+    else if (key === "repo") meta.repo = val;
+    else if (key === "closed_at") meta.closed_at = val || undefined;
+    else if (key === "updated_at") meta.updated_at = val || undefined;
+  }
+  return meta;
+}
+
+// `key:` の直後に続く `  - item` ブロックリストを集める。
+function collectBlockList(lines: string[], from: number, end: number): string[] {
+  const out: string[] = [];
+  for (let i = from + 1; i < end; i++) {
+    const m = lines[i]!.match(/^\s+-\s+(.*)$/);
+    if (!m) break;
+    const v = m[1]!.trim().replace(/^["']|["']$/g, "");
+    if (v) out.push(v);
+  }
+  return out;
+}
+
+// `[a, "b: c"]` 形式のフロー配列。JSON で読めれば JSON、ダメなら素朴分割。
+function parseFlowList(val: string): string[] {
+  const inner = val.replace(/^\[/, "").replace(/\]$/, "").trim();
+  if (!inner) return [];
+  try {
+    const arr = JSON.parse(`[${inner}]`) as unknown[];
+    return arr.map((x) => String(x).trim()).filter(Boolean);
+  } catch {
+    return inner
+      .split(",")
+      .map((s) => s.trim().replace(/^["']|["']$/g, ""))
+      .filter(Boolean);
+  }
 }

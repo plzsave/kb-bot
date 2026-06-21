@@ -145,6 +145,27 @@ export function createGitHub(token: string | undefined, repos: string[]): GitHub
   };
 }
 
+/**
+ * リポの HEAD（既定ブランチ）に path が存在するか。kb-prune の code_drift 判定用。
+ * true=存在 / false=404 / null=判定不能（権限・ネットワーク等。誤検知を避け null は flag しない）。
+ */
+export async function repoFileExists(
+  token: string | undefined,
+  repo: string,
+  path: string,
+): Promise<boolean | null> {
+  if (rejectPath(path)) return null; // 不正パスは判定対象外
+  try {
+    const url = `${API}/repos/${repo}/contents/${encodeURIComponent(path).replace(/%2F/g, "/")}`;
+    const res = await fetch(url, { headers: headers(token) });
+    if (res.status === 404) return false;
+    if (res.ok) return true;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /** 環境変数から GitHub を構成。KB_GITHUB_REPOS 未設定なら undefined（機能オフ）。 */
 export function loadGitHub(): GitHub | undefined {
   const reposRaw = process.env.KB_GITHUB_REPOS?.trim();

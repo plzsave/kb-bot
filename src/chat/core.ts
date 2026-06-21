@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import type Anthropic from "@anthropic-ai/sdk";
 import { search } from "../kb/db.ts";
 import { getCachedAnswer, putCachedAnswer } from "../cache.ts";
+import { logUsage } from "../usage.ts";
 import { runAgent, type AgentTool } from "../agent/agent.ts";
 import { searchKnowledgeTool, formatHits } from "../agent/tools.ts";
 import { githubTools } from "../agent/githubTools.ts";
@@ -115,6 +116,7 @@ export async function answer(
 
   // ② FTS5/BM25 で関連チャンクを取得し初期コンテキストに前置き（埋め込み課金ゼロ）
   const hits = search(db, q, TOP_K);
+  logUsage(db, hits.map((h) => h.docKey)); // 検索ヒットを retrieved として記録（kb-prune 用）
   const initialPrompt = `# 初期コンテキスト（FTS検索の上位${hits.length}件）\n\n${formatHits(hits)}\n\n# 質問\n${q}`;
 
   // ③ エージェント実行（既定 Haiku・プロンプトキャッシュ・tool use）。逐次更新。

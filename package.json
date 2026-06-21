@@ -12,6 +12,7 @@
     "kb:ingest": "bun run scripts/kb-ingest.ts",
     "kb:search": "bun run scripts/kb-search.ts",
     "kb:issues": "bun run scripts/issue-to-kb.ts",
+    "kb:prune": "bun run scripts/kb-prune.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },
