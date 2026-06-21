@@ -46,6 +46,30 @@ export function countChunks(db: Database): number {
   return (db.query("SELECT count(*) AS n FROM chunks").get() as { n: number }).n;
 }
 
+/**
+ * keep に含まれない doc_key の索引行を削除し、消した doc 数を返す。
+ * ingest は現存キーだけを upsert するため、S3 から消えた/除外されたドキュメントの
+ * 古い索引が残り続ける（追加専用）。取り込みの最後にこれを呼んで「S3 の現状＝索引の現状」
+ * を保つ。keep が空なら全削除（md が 1 件も無い状態＝索引も空であるべき）。
+ */
+export function pruneDocsNotIn(db: Database, keep: string[]): number {
+  const tx = db.transaction(() => {
+    db.run("CREATE TEMP TABLE IF NOT EXISTS _keep (k TEXT PRIMARY KEY)");
+    db.run("DELETE FROM _keep");
+    const ins = db.query("INSERT OR IGNORE INTO _keep (k) VALUES (?)");
+    for (const k of keep) ins.run(k);
+    const removed = (
+      db.query("SELECT count(DISTINCT doc_key) AS n FROM chunks WHERE doc_key NOT IN (SELECT k FROM _keep)").get() as {
+        n: number;
+      }
+    ).n;
+    db.run("DELETE FROM chunks WHERE doc_key NOT IN (SELECT k FROM _keep)");
+    db.run("DROP TABLE _keep");
+    return removed;
+  });
+  return tx();
+}
+
 export function search(db: Database, rawQuery: string, limit = 5): SearchHit[] {
   const match = buildMatchQuery(rawQuery);
   if (!match) return [];

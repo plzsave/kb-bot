@@ -46,6 +46,24 @@ export class S3Client {
     if (!res.ok) throw new Error(`S3 get failed: ${res.status} (${key})`);
     return res.text();
   }
+
+  /** オブジェクトを PUT する（issue ナレッジの配置に使う）。 */
+  async put(key: string, body: string, contentType = "text/markdown; charset=utf-8"): Promise<void> {
+    const res = await this.client.fetch(`${this.base()}/${encodeURI(key)}`, {
+      method: "PUT",
+      body,
+      headers: { "Content-Type": contentType },
+    });
+    if (!res.ok) throw new Error(`S3 put failed: ${res.status} ${await res.text()} (${key})`);
+  }
+
+  /** キーの存在確認（HEAD）。tombstone（_stale への隔離済み）判定に使う。 */
+  async exists(key: string): Promise<boolean> {
+    const res = await this.client.fetch(`${this.base()}/${encodeURI(key)}`, { method: "HEAD" });
+    if (res.ok) return true;
+    if (res.status === 404) return false;
+    throw new Error(`S3 head failed: ${res.status} (${key})`);
+  }
 }
 
 function unescapeXml(s: string): string {
