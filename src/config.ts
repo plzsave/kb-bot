@@ -48,6 +48,35 @@ export function loadBotConfig(): BotConfig {
   };
 }
 
+export interface IssueConfig {
+  /** issue 収集対象リポジトリ（KB_GITHUB_REPOS とは分離）。 */
+  repos: string[];
+  /** read-only PAT（Issues:read）。未設定でも public なら動くが推奨。 */
+  githubToken: string | undefined;
+  /** この件数未満のコメントの issue は除外（既定1）。 */
+  minComments: number;
+  anthropicApiKey: string;
+  model: string;
+}
+
+export function loadIssueConfig(reposOverride?: string[]): IssueConfig {
+  const raw = reposOverride ?? splitCsv(process.env.KB_ISSUE_REPOS);
+  const repos = raw.map((r) => r.trim()).filter(Boolean);
+  if (repos.length === 0) throw new Error("対象リポジトリが未指定です（--repos か KB_ISSUE_REPOS を設定）");
+  const min = Number(process.env.KB_ISSUE_MIN_COMMENTS);
+  return {
+    repos,
+    githubToken: process.env.GITHUB_TOKEN?.trim() || undefined,
+    minComments: Number.isFinite(min) && min >= 0 ? min : 1,
+    anthropicApiKey: required("ANTHROPIC_API_KEY"),
+    model: process.env.KB_MODEL ?? "claude-haiku-4-5",
+  };
+}
+
+function splitCsv(v: string | undefined): string[] {
+  return (v ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
 export interface DiscordConfig {
   discordBotToken: string;
   anthropicApiKey: string;

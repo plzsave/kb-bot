@@ -11,6 +11,7 @@
     "dev:discord": "bun --watch run src/discord.ts",
     "kb:ingest": "bun run scripts/kb-ingest.ts",
     "kb:search": "bun run scripts/kb-search.ts",
+    "kb:issues": "bun run scripts/issue-to-kb.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },

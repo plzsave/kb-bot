@@ -1,5 +1,6 @@
 node_modules/
 *.sqlite
 *.sqlite-*
+data/
 .env
 .env.local

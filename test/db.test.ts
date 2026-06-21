@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { openDb, replaceDoc, search, buildMatchQuery, countChunks, dropWeakHits } from "../src/kb/db.ts";
+import { openDb, replaceDoc, search, buildMatchQuery, countChunks, dropWeakHits, pruneDocsNotIn } from "../src/kb/db.ts";
 import { chunkMarkdown } from "../src/kb/chunk.ts";
+import { isStaleKey } from "../src/kb/ingest.ts";
 
 // openDb はパス指定だが ":memory:" でインメモリ DB を開ける（資格情報・ファイル不要）。
 function memDb(): Database {
@@ -46,4 +47,29 @@ test("replaceDoc は同一 docKey を入れ替える（重複しない）", () =
   replaceDoc(db, "a.md", chunkMarkdown("# A\n\n初版"));
   replaceDoc(db, "a.md", chunkMarkdown("# A\n\n改訂版"));
   expect(countChunks(db)).toBe(1);
+});
+
+test("pruneDocsNotIn は keep 外の doc を消し、件数を返す", () => {
+  const db = memDb();
+  replaceDoc(db, "a.md", chunkMarkdown("# A\n\n認証の手順"));
+  replaceDoc(db, "b.md", chunkMarkdown("# B\n\nデプロイの設定"));
+  replaceDoc(db, "c.md", chunkMarkdown("# C\n\n課金の仕組み"));
+  const removed = pruneDocsNotIn(db, ["a.md", "c.md"]);
+  expect(removed).toBe(1); // b.md が消える
+  expect(countChunks(db)).toBe(2);
+  expect(search(db, "デプロイ", 5).length).toBe(0);
+  expect(search(db, "認証", 5).length).toBeGreaterThan(0);
+});
+
+test("pruneDocsNotIn は keep 空なら全削除", () => {
+  const db = memDb();
+  replaceDoc(db, "a.md", chunkMarkdown("# A\n\n認証の手順"));
+  expect(pruneDocsNotIn(db, [])).toBe(1);
+  expect(countChunks(db)).toBe(0);
+});
+
+test("isStaleKey は _stale 配下を判定", () => {
+  expect(isStaleKey("knowledge/_stale/github-issues/x-y/1.md")).toBe(true);
+  expect(isStaleKey("_stale/1.md")).toBe(true);
+  expect(isStaleKey("knowledge/github-issues/x-y/1.md")).toBe(false);
 });

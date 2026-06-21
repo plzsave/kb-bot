@@ -13,6 +13,8 @@ const report = await ingest(db, cfg, (m) => console.log(m));
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
 
 console.log("\n=== 取り込み完了 ===");
-console.log(`成功 ${report.files} ファイル / 総チャンク ${report.chunks} / 失敗 ${report.skipped.length}`);
+console.log(
+  `成功 ${report.files} ファイル / 総チャンク ${report.chunks} / 失敗 ${report.skipped.length} / 掃除 ${report.removed}`,
+);
 console.log(`インデックス総チャンク数: ${countChunks(db)} (DB: ${dbPath()}, ${secs}s)`);
 if (report.skipped.length) console.log("失敗キー:", report.skipped.join(", "));

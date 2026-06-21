@@ -17,8 +17,23 @@ interface Section {
   lines: string[];
 }
 
+// 先頭 YAML frontmatter（`---` で開き、次の `---` 行で閉じる）を剥がす。
+// issue ナレッジが持つ機械可読メタ（labels/repo 等）を本文として索引しないため。
+// 本文途中の `---`（水平線）を誤って終端にしないよう、ファイル先頭ブロック限定。
+// 閉じ `---` が無ければ frontmatter とみなさず素通し（過剰除去を避ける安全側）。
+export function stripFrontmatter(md: string): string {
+  const lines = md.split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") return md;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i]!.trim() === "---") {
+      return lines.slice(i + 1).join("\n").replace(/^\n+/, "");
+    }
+  }
+  return md;
+}
+
 export function chunkMarkdown(md: string): Chunk[] {
-  const sections = splitByHeadings(md);
+  const sections = splitByHeadings(stripFrontmatter(md));
   const chunks: Chunk[] = [];
   let ord = 0;
   for (const sec of sections) {
