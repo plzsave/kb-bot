@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { loadDiscordConfig, dbPath } from "./config.ts";
 import { openDb, countChunks } from "./kb/db.ts";
 import { ensureCacheTable } from "./cache.ts";
+import { ensureUsageTable } from "./usage.ts";
 import { answer, type AnswerDeps, type HistoryTurn } from "./chat/core.ts";
 import { discordReply } from "./chat/discord.ts";
 import { loadGitHub } from "./github.ts";
@@ -18,6 +19,7 @@ const guard = new InFlightGuard(); // 同一ユーザーの多重実行を防ぐ
 const cfg = loadDiscordConfig();
 const db = openDb(dbPath());
 ensureCacheTable(db);
+ensureUsageTable(db);
 const anthropic = new Anthropic({ apiKey: cfg.anthropicApiKey });
 const github = loadGitHub();
 const deps: AnswerDeps = { db, anthropic, model: cfg.model, github };

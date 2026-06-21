@@ -64,6 +64,13 @@ export class S3Client {
     if (res.status === 404) return false;
     throw new Error(`S3 head failed: ${res.status} (${key})`);
   }
+
+  /** オブジェクトを削除する（kb-prune の隔離 = put(_stale) + delete(元) に使う）。 */
+  async delete(key: string): Promise<void> {
+    const res = await this.client.fetch(`${this.base()}/${encodeURI(key)}`, { method: "DELETE" });
+    // S3 の DELETE は対象が無くても 204 を返す。2xx 以外のみ失敗扱い。
+    if (!res.ok && res.status !== 204) throw new Error(`S3 delete failed: ${res.status} (${key})`);
+  }
 }
 
 function unescapeXml(s: string): string {

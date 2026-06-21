@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { search } from "../kb/db.ts";
+import { logUsage } from "../usage.ts";
 import type { AgentTool } from "./agent.ts";
 
 // ナレッジ検索ツール。FTS5/BM25 でチャンクを引き、出典付きで返す。
@@ -26,6 +27,7 @@ export function searchKnowledgeTool(db: Database): AgentTool {
       const { query, limit } = (input ?? {}) as { query?: string; limit?: number };
       if (!query) return "（検索語が空でした）";
       const hits = search(db, query, Math.min(limit ?? 5, 10));
+      logUsage(db, hits.map((h) => h.docKey)); // 検索ヒットを retrieved として記録（kb-prune 用）
       return formatHits(hits);
     },
   };
