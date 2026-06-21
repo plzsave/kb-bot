@@ -14,7 +14,7 @@ export function searchKnowledgeTool(db: Database): AgentTool {
         "R2/S3 に蓄積された Markdown ナレッジを全文検索する。" +
         "ユーザーの質問に答えるための事実・手順・用語が初期コンテキストに無い、" +
         "または不足している時に呼ぶ。日本語の質問はそのまま渡してよい。",
-      input_schema: {
+      parameters: {
         type: "object",
         properties: {
           query: { type: "string", description: "検索したい語句や言い換え" },

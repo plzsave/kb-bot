@@ -1,6 +1,9 @@
 // 環境変数の読み出し（bun は .env を自動ロードする）。
 // 値はここでしか読まない＝テスト時に差し替えやすく、未設定を早期に検出する。
 
+import type { LlmProvider } from "./llm/provider.ts";
+import { createLlm } from "./llm/factory.ts";
+
 export interface S3Config {
   endpoint: string;
   bucket: string;
@@ -34,17 +37,19 @@ export function dbPath(): string {
 export interface BotConfig {
   slackBotToken: string;
   slackAppToken: string;
-  anthropicApiKey: string;
-  /** 既定モデル。コスト優先で Haiku。難問だけ上位へエスカレーションする想定。 */
+  /** 選択中の LLM プロバイダ（KB_LLM_PROVIDER）。 */
+  provider: LlmProvider;
+  /** 解決済みモデル。コスト優先で各社最安ティア。難問だけ KB_MODEL で上位へ。 */
   model: string;
 }
 
 export function loadBotConfig(): BotConfig {
+  const { provider, model } = createLlm();
   return {
     slackBotToken: required("SLACK_BOT_TOKEN"),
     slackAppToken: required("SLACK_APP_TOKEN"),
-    anthropicApiKey: required("ANTHROPIC_API_KEY"),
-    model: process.env.KB_MODEL ?? "claude-haiku-4-5",
+    provider,
+    model,
   };
 }
 
@@ -55,7 +60,7 @@ export interface IssueConfig {
   githubToken: string | undefined;
   /** この件数未満のコメントの issue は除外（既定1）。 */
   minComments: number;
-  anthropicApiKey: string;
+  provider: LlmProvider;
   model: string;
 }
 
@@ -64,12 +69,13 @@ export function loadIssueConfig(reposOverride?: string[]): IssueConfig {
   const repos = raw.map((r) => r.trim()).filter(Boolean);
   if (repos.length === 0) throw new Error("対象リポジトリが未指定です（--repos か KB_ISSUE_REPOS を設定）");
   const min = Number(process.env.KB_ISSUE_MIN_COMMENTS);
+  const { provider, model } = createLlm();
   return {
     repos,
     githubToken: process.env.GITHUB_TOKEN?.trim() || undefined,
     minComments: Number.isFinite(min) && min >= 0 ? min : 1,
-    anthropicApiKey: required("ANTHROPIC_API_KEY"),
-    model: process.env.KB_MODEL ?? "claude-haiku-4-5",
+    provider,
+    model,
   };
 }
 
@@ -79,14 +85,15 @@ function splitCsv(v: string | undefined): string[] {
 
 export interface DiscordConfig {
   discordBotToken: string;
-  anthropicApiKey: string;
+  provider: LlmProvider;
   model: string;
 }
 
 export function loadDiscordConfig(): DiscordConfig {
+  const { provider, model } = createLlm();
   return {
     discordBotToken: required("DISCORD_BOT_TOKEN"),
-    anthropicApiKey: required("ANTHROPIC_API_KEY"),
-    model: process.env.KB_MODEL ?? "claude-haiku-4-5",
+    provider,
+    model,
   };
 }

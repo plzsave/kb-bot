@@ -1,5 +1,4 @@
 import { Client, GatewayIntentBits, Partials, Events } from "discord.js";
-import Anthropic from "@anthropic-ai/sdk";
 import { loadDiscordConfig, dbPath } from "./config.ts";
 import { openDb, countChunks } from "./kb/db.ts";
 import { ensureCacheTable } from "./cache.ts";
@@ -20,9 +19,8 @@ const cfg = loadDiscordConfig();
 const db = openDb(dbPath());
 ensureCacheTable(db);
 ensureUsageTable(db);
-const anthropic = new Anthropic({ apiKey: cfg.anthropicApiKey });
 const github = loadGitHub();
-const deps: AnswerDeps = { db, anthropic, model: cfg.model, github };
+const deps: AnswerDeps = { db, provider: cfg.provider, model: cfg.model, github };
 
 const client = new Client({
   // メッセージ本文の取得には MessageContent（特権インテント）が必要。
@@ -116,7 +114,7 @@ client.on(Events.MessageCreate, async (message) => {
 client.once(Events.ClientReady, (c) => {
   startHeartbeat(); // 死活監視（Docker HEALTHCHECK 用）
   console.log(
-    `⚡️ kb-bot 起動（Discord / ${c.user.tag} / model=${cfg.model} / 索引チャンク=${countChunks(db)} / ` +
+    `⚡️ kb-bot 起動（Discord / ${c.user.tag} / ${cfg.provider.name}:${cfg.model} / 索引チャンク=${countChunks(db)} / ` +
       `GitHub=${github ? github.repos.join(",") : "off"}）`,
   );
 });
