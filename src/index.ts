@@ -1,5 +1,4 @@
 import { App } from "@slack/bolt";
-import Anthropic from "@anthropic-ai/sdk";
 import { loadBotConfig, dbPath } from "./config.ts";
 import { openDb, countChunks } from "./kb/db.ts";
 import { ensureCacheTable } from "./cache.ts";
@@ -34,9 +33,8 @@ const cfg = loadBotConfig();
 const db = openDb(dbPath());
 ensureCacheTable(db);
 ensureUsageTable(db);
-const anthropic = new Anthropic({ apiKey: cfg.anthropicApiKey });
 const github = loadGitHub();
-const deps: AnswerDeps = { db, anthropic, model: cfg.model, github };
+const deps: AnswerDeps = { db, provider: cfg.provider, model: cfg.model, github };
 
 const app = new App({
   token: cfg.slackBotToken,
@@ -91,6 +89,6 @@ app.message(async ({ message, client, context }) => {
 await app.start();
 startHeartbeat(); // 死活監視（Docker HEALTHCHECK 用）
 console.log(
-  `⚡️ kb-bot 起動（Slack / Socket Mode / model=${cfg.model} / 索引チャンク=${countChunks(db)} / ` +
+  `⚡️ kb-bot 起動（Slack / Socket Mode / ${cfg.provider.name}:${cfg.model} / 索引チャンク=${countChunks(db)} / ` +
     `GitHub=${github ? github.repos.join(",") : "off"}）`,
 );

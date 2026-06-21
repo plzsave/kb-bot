@@ -17,7 +17,7 @@ export function githubTools(gh: GitHub): AgentTool[] {
         description:
           "GitHub リポジトリのファイル一覧（パス）を取得する。" +
           "アプリの構成を把握し、どのファイルを読むべきか当たりを付けるのに使う。",
-        input_schema: { type: "object", properties: { ...repoProp }, required: [] },
+        parameters: { type: "object", properties: { ...repoProp }, required: [] },
       },
       async run(input) {
         const { repo } = (input ?? {}) as { repo?: string };
@@ -33,7 +33,7 @@ export function githubTools(gh: GitHub): AgentTool[] {
           "GitHub リポジトリ内の 1 ファイルを読む（行番号付き）。仕様・挙動・使い方は" +
           "ドキュメントより実コードが真実なので、根拠としてこれで該当箇所を確認する。" +
           "大きいファイルは start_line / end_line で範囲指定するとトークンを節約できる。",
-        input_schema: {
+        parameters: {
           type: "object",
           properties: {
             ...repoProp,
@@ -63,7 +63,7 @@ export function githubTools(gh: GitHub): AgentTool[] {
         description:
           "GitHub リポジトリ内のコードをキーワード検索し、一致したファイルパスを返す。" +
           "関数名・識別子・文言などから該当箇所を素早く見つけたい時に使う（その後 read_repo_file で読む）。",
-        input_schema: {
+        parameters: {
           type: "object",
           properties: {
             ...repoProp,

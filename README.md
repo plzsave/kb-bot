@@ -13,18 +13,29 @@ adapters (`src/chat/slack.ts` / `src/chat/discord.ts`) you swap in.
 
 1. **Answer cache** (SQLite, exact match) — a hit skips the LLM entirely (the biggest saver).
 2. **FTS5/BM25 search** (`bun:sqlite` + morphological segmentation) — retrieval with zero embedding-API cost.
-3. **Prompt caching** (`cache_control: ephemeral`) — reuses the system prompt / tool definitions.
-4. **Model tiering** — defaults to `claude-haiku-4-5`; bump to a larger model only when needed (`KB_MODEL`).
+3. **Prompt caching** — reuses the system prompt / tool definitions. Provider-specific but always on:
+   Anthropic uses `cache_control: ephemeral`; Gemini uses implicit caching automatically.
+4. **Model tiering** — defaults to each provider's cheapest tier; bump only when needed (`KB_MODEL`).
 
 > For Japanese knowledge, FTS5 uses **TinySegmenter (morphological segmentation) + unicode61**
 > instead of `trigram`. `trigram` could not match 2-character words (e.g. 「認証」) and recall
 > dropped once particles were glued to keywords — verified, then switched.
 
+## LLM provider (Anthropic / Gemini)
+
+The answer logic talks to LLMs through a thin provider interface (`src/llm/`), so you can switch
+backends with `KB_LLM_PROVIDER` (`anthropic` default, or `gemini`). Only the selected provider's key
+is required (`ANTHROPIC_API_KEY` / `GEMINI_API_KEY`). The cost savers are unaffected by the choice:
+the **answer cache** and **FTS5/BM25 search** never call an LLM API at all, and **prompt-cache
+discounts are preserved** on every provider (just expressed differently — explicit on Anthropic,
+automatic on Gemini). Default models are the cheapest tier per provider (`claude-haiku-4-5` /
+`gemini-3.1-flash-lite`); override with `KB_MODEL` to escalate.
+
 ## Setup
 
 ```bash
 bun install
-cp .env.example .env   # fill in the values (S3/R2, Slack/Discord, Anthropic)
+cp .env.example .env   # fill in the values (S3/R2, Slack/Discord, Anthropic or Gemini)
 ```
 
 **Slack:** enable Socket Mode → obtain an App-Level Token (`connections:write`) and a Bot Token.

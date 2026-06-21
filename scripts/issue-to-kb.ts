@@ -4,7 +4,6 @@
 //   bun run scripts/issue-to-kb.ts [--repos a,b] [--since ISO] [--dry-run] [--model X] [--max-issues N]
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
-import Anthropic from "@anthropic-ai/sdk";
 import { loadS3Config, loadIssueConfig } from "../src/config.ts";
 import { S3Client } from "../src/s3.ts";
 import { listClosedIssues, fetchComments } from "../src/issues.ts";
@@ -62,7 +61,6 @@ const cfg = loadIssueConfig(args.repos);
 const s3cfg = loadS3Config();
 const s3 = new S3Client(s3cfg);
 const model = args.model ?? cfg.model;
-const client = new Anthropic({ apiKey: cfg.anthropicApiKey });
 const state = loadState();
 
 let written = 0;
@@ -101,14 +99,13 @@ for (const repo of cfg.repos) {
     try {
       const comments = await fetchComments(repo, issue.number, cfg.githubToken, (m) => console.log(m));
       const prompt = buildUserPrompt({ issue, comments });
-      const msg = await client.messages.create({
+      const text = await cfg.provider.complete({
         model,
-        max_tokens: 1500,
+        maxTokens: 1500,
         temperature: 0,
         system: SUMMARY_SYSTEM,
-        messages: [{ role: "user", content: prompt }],
+        prompt,
       });
-      const text = msg.content.map((b) => (b.type === "text" ? b.text : "")).join("");
       const { body, relatedFiles } = parseSummary(text);
       const md = assembleMarkdown({ issue, repo, body, relatedFiles });
       const key = issueDocKey(s3cfg.prefix, repo, issue.number);

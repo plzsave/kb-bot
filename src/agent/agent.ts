@@ -1,27 +1,28 @@
-import Anthropic from "@anthropic-ai/sdk";
+import type {
+  LlmMessage,
+  LlmProvider,
+  LlmToolDef,
+  LlmToolResultBlock,
+  LlmUsage,
+} from "../llm/provider.ts";
 
-// ネイティブ tool use のループ（mdcollab の reviewAgent と同じ思想：ループ論理は
-// プロバイダ詳細から独立、ツール実体は注入）。ストリーミングで逐次 onDelta を呼ぶ。
-// system はキャッシュ前提で安定させ、cache_control: ephemeral を付ける。
+// ネイティブ tool use のループ。ループ論理はプロバイダ詳細から独立し（中立型 LlmProvider に依存）、
+// ツール実体は注入する。ストリーミングで逐次 onDelta を呼ぶ。プロンプトキャッシュは cacheHint で
+// 任意化し、対応プロバイダのみ適用される（非対応は no-op）。
 
 export interface AgentTool {
-  def: Anthropic.Tool;
+  def: LlmToolDef;
   /** never throw 推奨。失敗はメモ文字列で返してモデルに再試行させる。 */
   run(input: unknown): Promise<string>;
 }
 
-export interface AgentUsage {
-  input: number; // キャッシュ未ヒットの新規入力
-  output: number;
-  cacheRead: number;
-  cacheCreation: number;
-}
+export type AgentUsage = LlmUsage;
 
 export interface RunAgentOpts {
-  client: Anthropic;
+  provider: LlmProvider;
   model: string;
   system: string;
-  messages: Anthropic.MessageParam[];
+  messages: LlmMessage[];
   tools: AgentTool[];
   maxTurns?: number;
   maxTokens?: number;
@@ -44,7 +45,7 @@ function emptyUsage(): AgentUsage {
 
 export async function runAgent(opts: RunAgentOpts): Promise<RunAgentResult> {
   const registry = new Map(opts.tools.map((t) => [t.def.name, t]));
-  const messages: Anthropic.MessageParam[] = [...opts.messages];
+  const messages: LlmMessage[] = [...opts.messages];
   const usage = emptyUsage();
   const toolsUsed: string[] = [];
   let full = ""; // 全ターンの逐次出力（truncated 時のフォールバック・ライブ表示用）
@@ -52,35 +53,30 @@ export async function runAgent(opts: RunAgentOpts): Promise<RunAgentResult> {
   let completed = false;
 
   const maxTurns = opts.maxTurns ?? DEFAULT_MAX_TURNS;
-
-  // system はブロック配列にして末尾に cache_control を置く＝tools+system がキャッシュ対象。
-  const system: Anthropic.TextBlockParam[] = [
-    { type: "text", text: opts.system, cache_control: { type: "ephemeral" } },
-  ];
+  const tools = opts.tools.map((t) => t.def);
 
   for (let turn = 0; turn < maxTurns; turn++) {
     let turnText = ""; // このターンの出力（tool_use 前の「確認します」等の前置きを含む）
-    const stream = opts.client.messages.stream({
+    const result = await opts.provider.streamTurn({
       model: opts.model,
-      max_tokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
-      system,
-      tools: opts.tools.map((t) => t.def),
+      system: opts.system,
       messages,
+      tools,
+      maxTokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
+      cacheHint: true, // system+tools は安定＝キャッシュ対象（対応プロバイダのみ適用）
+      onText: (delta) => {
+        full += delta;
+        turnText += delta;
+        opts.onDelta?.(delta);
+      },
     });
 
-    stream.on("text", (delta) => {
-      full += delta;
-      turnText += delta;
-      opts.onDelta?.(delta);
-    });
+    usage.input += result.usage.input;
+    usage.output += result.usage.output;
+    usage.cacheRead += result.usage.cacheRead;
+    usage.cacheCreation += result.usage.cacheCreation;
 
-    const msg = await stream.finalMessage();
-    usage.input += msg.usage.input_tokens;
-    usage.output += msg.usage.output_tokens;
-    usage.cacheRead += msg.usage.cache_read_input_tokens ?? 0;
-    usage.cacheCreation += msg.usage.cache_creation_input_tokens ?? 0;
-
-    if (msg.stop_reason !== "tool_use") {
+    if (result.stopReason !== "tool_use") {
       // 最終回答ターン。途中のツール実況を混ぜず、このターンのテキストだけを答えにする。
       answerText = turnText;
       completed = true;
@@ -88,15 +84,15 @@ export async function runAgent(opts: RunAgentOpts): Promise<RunAgentResult> {
     }
 
     // tool_use を含む assistant 生ブロックをそのまま積む（tool_use_id 対応の正しさの鍵）。
-    messages.push({ role: "assistant", content: msg.content });
+    messages.push({ role: "assistant", content: result.blocks });
 
-    const results: Anthropic.ToolResultBlockParam[] = [];
-    for (const block of msg.content) {
+    const results: LlmToolResultBlock[] = [];
+    for (const block of result.blocks) {
       if (block.type !== "tool_use") continue;
       const impl = registry.get(block.name);
       const out = impl ? await impl.run(block.input) : `unknown tool: ${block.name}`;
       toolsUsed.push(block.name);
-      results.push({ type: "tool_result", tool_use_id: block.id, content: out });
+      results.push({ type: "tool_result", toolUseId: block.id, content: out, name: block.name });
     }
     messages.push({ role: "user", content: results });
   }

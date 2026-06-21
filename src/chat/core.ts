@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type Anthropic from "@anthropic-ai/sdk";
+import type { LlmMessage, LlmProvider } from "../llm/provider.ts";
 import { search } from "../kb/db.ts";
 import { getCachedAnswer, putCachedAnswer } from "../cache.ts";
 import { logUsage } from "../usage.ts";
@@ -65,16 +65,16 @@ export interface HistoryTurn {
 
 export interface AnswerDeps {
   db: Database;
-  anthropic: Anthropic;
+  provider: LlmProvider;
   model: string;
   /** 設定されていれば GitHub コード参照ツールを有効化する（実コードで仕様を語る）。 */
   github?: GitHub;
 }
 
-// Anthropic は user/assistant の交互かつ user 始まりを要求するため、履歴を正規化する。
-// 連続する同一ロールは結合し、先頭の assistant は落とす。
-export function normalizeHistory(history: HistoryTurn[]): Anthropic.MessageParam[] {
-  const out: Anthropic.MessageParam[] = [];
+// 多くのプロバイダ（特に Anthropic）は user/assistant の交互かつ user 始まりを要求するため、
+// 履歴を正規化する。連続する同一ロールは結合し、先頭の assistant は落とす。
+export function normalizeHistory(history: HistoryTurn[]): LlmMessage[] {
+  const out: LlmMessage[] = [];
   for (const turn of history) {
     if (!turn.text.trim()) continue;
     const last = out[out.length - 1];
@@ -97,7 +97,7 @@ export async function answer(
 ): Promise<void> {
   const q = question.trim();
   if (!q) return;
-  const { db, anthropic, model, github } = deps;
+  const { db, provider, model, github } = deps;
   const hasContext = history.length > 0;
 
   // ① 回答キャッシュ（完全一致）→ ヒットなら LLM を呼ばない＝最大の節約。
@@ -133,7 +133,7 @@ export async function answer(
   };
 
   // スレッド/DM の過去発言を会話履歴として前置きし、今回の質問を最後に積む。
-  const messages: Anthropic.MessageParam[] = [
+  const messages: LlmMessage[] = [
     ...normalizeHistory(history),
     { role: "user", content: initialPrompt },
   ];
@@ -142,7 +142,7 @@ export async function answer(
   // 固まる/未処理例外で落ちることを防ぎ、プレースホルダをエラー文言に置き換える。
   try {
     const result = await runAgent({
-      client: anthropic,
+      provider,
       model,
       system: buildSystem(github),
       messages,
