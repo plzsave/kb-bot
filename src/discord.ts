@@ -1,5 +1,5 @@
 import { Client, GatewayIntentBits, Partials, Events } from "discord.js";
-import { loadDiscordConfig, dbPath } from "./config.ts";
+import { loadDiscordConfig, dbPath, loadSystemExtraResolver } from "./config.ts";
 import { openDb, countChunks } from "./kb/db.ts";
 import { ensureCacheTable } from "./cache.ts";
 import { ensureUsageTable } from "./usage.ts";
@@ -20,7 +20,14 @@ const db = openDb(dbPath());
 ensureCacheTable(db);
 ensureUsageTable(db);
 const github = loadGitHub();
-const deps: AnswerDeps = { db, provider: cfg.provider, model: cfg.model, modelHard: cfg.modelHard, github };
+const deps: AnswerDeps = {
+  db,
+  provider: cfg.provider,
+  model: cfg.model,
+  modelHard: cfg.modelHard,
+  github,
+  loadSystemExtra: loadSystemExtraResolver(),
+};
 
 const client = new Client({
   // メッセージ本文の取得には MessageContent（特権インテント）が必要。
