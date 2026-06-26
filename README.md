@@ -1,13 +1,59 @@
 # kb-bot
 
-A low-cost knowledge bot for **Slack and Discord**. It answers from Markdown knowledge stored in
-R2/S3, and — because docs go stale — it can **read the actual GitHub source code to explain how an
-app behaves and how to use it**, citing file paths and line numbers.
+A knowledge bot for **Slack and Discord** that answers your team's questions from two sources at once:
+your written **Markdown docs** and your **actual source code**. Ask in plain language, get an answer
+with its sources.
 
-The answer logic (`src/chat/core.ts`) is platform-agnostic; Slack and Discord are just
-adapters (`src/chat/slack.ts` / `src/chat/discord.ts`) you swap in.
+> 日本語版: [README.ja.md](README.ja.md) · A guide for non-engineers: [docs/USAGE.ja.md](docs/USAGE.ja.md)
 
-> 日本語版: [README.ja.md](README.ja.md)
+## What it does
+
+Team knowledge lives in two places, and they drift apart:
+
+- **Written docs** — runbooks, how-tos, rules. Easy to read, but they go stale.
+- **The source code** — always current, but hard to read unless you wrote it.
+
+kb-bot answers from **both**. In Slack or Discord, a teammate can ask:
+
+- *"How do I issue an API token?"* → answered from your **Markdown docs**.
+- *"What's the retry limit, and where is it set?"* → answered from the **real code**, quoting the file and line.
+
+No embeddings and no vector database — retrieval is plain full-text search, which is a big part of why it's
+cheap to run (more on cost below).
+
+## Where it looks: docs or code?
+
+This is the core idea. kb-bot doesn't decide up front to use one place — it **routes by the kind of
+question**, and uses both when needed:
+
+| You ask about… | It reads… |
+|---|---|
+| Procedures, operations, rules, term definitions | your **Markdown docs** in S3/R2 (full-text search) |
+| How something works or behaves, spec details, "why" | your **real GitHub code**, read live |
+| Ambiguous, or needs both | both, then reconciles them |
+
+Two design choices keep the answers trustworthy:
+
+- **Code is read live from GitHub**, so it is never stale. Docs in S3 *can* age — so when the docs and the
+  code disagree, the bot is told to **trust the code**.
+- For **large repos (monorepos)**, it first pulls a *map* of the repo (top-level dirs + where each package
+  lives), then drills into the right package — instead of drowning in thousands of files.
+
+```
+Your question
+  ├─ procedures / rules / definitions ───→ search the Markdown docs (S3/R2)
+  └─ behavior / spec / "how does it work" → read the real code on GitHub (live = always current)
+                                  │
+                                  ▼
+            an answer in your language, citing the sources it used
+```
+
+## What you provide
+
+- **Markdown docs** in S3/R2 — you write `.md` files and run `kb:ingest` to index them. Where they come
+  from is up to you (hand-written runbooks, exported wiki pages, and so on).
+- **GitHub repos** (optional) — set `KB_GITHUB_REPOS` to the repos the bot may read. Without it, kb-bot
+  answers from docs only.
 
 ## How it keeps costs low
 
@@ -82,6 +128,10 @@ Documentation drifts; the code does not. When `KB_GITHUB_REPOS` is set, the agen
 source of truth** for questions about an app's behavior, spec, or usage. It navigates the repo, reads
 the relevant files, and cites paths + line numbers in its answer. Access is restricted to the
 allowlisted repos, and secret files (`.env`, `*.pem/key`, `secrets*`) and path traversal are refused.
+
+For **monorepos**, `list_repo_tree` returns a package map (top-level dirs + manifest locations) for large
+repos instead of every file; the agent then drills in with a `subdir`, and narrows `search_repo_code`
+with a `path`, so it finds the right package instead of unrelated hits across thousands of files.
 
 ## Customizing the system prompt (no redeploy)
 
