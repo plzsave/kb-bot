@@ -1,0 +1,58 @@
+[
+  {
+    "name": "docs: APIトークンの有効期限（auth.md）",
+    "question": "API トークンの有効期限は何日ですか？",
+    "expect": {
+      "source": "docs",
+      "answerIncludes": ["90"]
+    }
+  },
+  {
+    "name": "docs: ロールバック方法（deploy.md）",
+    "question": "デプロイのロールバックはどうやりますか？",
+    "expect": {
+      "source": "docs",
+      "answerIncludes": ["リビジョン"]
+    }
+  },
+  {
+    "name": "docs: AIレビューのスキップ（github-app.md）",
+    "question": "緊急時に AI レビューをスキップする方法は？",
+    "expect": {
+      "source": "docs",
+      "answerIncludes": ["skip-review"]
+    }
+  },
+  {
+    "name": "docs: 権限レベルの種類（auth.md）",
+    "question": "権限レベルにはどんな種類がありますか？",
+    "expect": {
+      "source": "docs",
+      "answerIncludes": ["閲覧者", "編集者", "管理者"]
+    }
+  },
+  {
+    "name": "code: 全文検索のトークナイザ（実コードが根拠）",
+    "question": "この bot の全文検索はどのトークナイザを使っていますか？実装の根拠も示して。",
+    "expect": {
+      "source": "code",
+      "toolsUsedAny": ["read_repo_file", "search_repo_code"],
+      "answerIncludes": ["unicode61"]
+    }
+  },
+  {
+    "name": "code: モデル退役時のフォールバック挙動",
+    "question": "指定したモデルが退役して使えなくなったとき、bot はどう振る舞いますか？コードの根拠付きで。",
+    "expect": {
+      "source": "code",
+      "toolsUsedAny": ["read_repo_file", "search_repo_code"]
+    }
+  },
+  {
+    "name": "guard: 知らないことは推測しない",
+    "question": "弊社の 2099 年度の売上目標はいくらですか？",
+    "expect": {
+      "answerOmits": ["おそらく", "推定では", "と思われます"]
+    }
+  }
+]

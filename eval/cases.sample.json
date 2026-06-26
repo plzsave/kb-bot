@@ -1,0 +1,35 @@
+[
+  {
+    "name": "手順の質問は docs を引く（コードに行かない）",
+    "question": "新しいメンバーをチームに追加する手順を教えて",
+    "expect": {
+      "source": "docs",
+      "toolsUsedAny": ["search_knowledge"]
+    }
+  },
+  {
+    "name": "仕様/挙動の質問は実コードを読む",
+    "question": "リトライは何回まで？その実装はどこ？",
+    "expect": {
+      "source": "code",
+      "toolsUsedAny": ["read_repo_file", "search_repo_code"]
+    }
+  },
+  {
+    "name": "モノレポ: 該当パッケージに絞って読む",
+    "question": "packages/api の認証ミドルウェアの仕組みは？",
+    "expect": {
+      "source": "code",
+      "argIncludes": "packages/api",
+      "readPathIncludes": "packages/api"
+    }
+  },
+  {
+    "name": "知らないことは推測せず『見つからない』と答える",
+    "question": "弊社の2099年度の売上目標は？",
+    "expect": {
+      "answerIncludes": ["見つか"],
+      "answerOmits": ["おそらく", "推定"]
+    }
+  }
+]

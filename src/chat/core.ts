@@ -35,7 +35,7 @@ export function buildSystem(gh?: GitHub, extra?: string): string {
   const withGh = !gh
     ? base
     : base +
-      `\n\n[Important] For questions about the app's spec, behavior, or usage, the docs may be stale, so treat the ACTUAL CODE as the source of truth. Repositories you may reference: ${gh.repos.join(", ")}. Use list_repo_tree to grasp the structure, search_repo_code to find the relevant spot, and read_repo_file to read the real code, then cite file paths and line numbers as evidence. If the docs and the code disagree, prefer the code.`;
+      `\n\n[Important] For questions about the app's spec, behavior, or usage, the docs may be stale, so treat the ACTUAL CODE as the source of truth. Repositories you may reference: ${gh.repos.join(", ")}. Use list_repo_tree to grasp the structure, search_repo_code to find the relevant spot, and read_repo_file to read the real code, then cite file paths and line numbers as evidence. If the docs and the code disagree, prefer the code.\n- [Monorepo] A repo may be large (a monorepo with many packages). list_repo_tree then returns an overview (top-level dirs + the location of package manifests like package.json) instead of every file. Use it to identify the right package first, then drill in with the subdir argument (e.g. subdir="packages/foo"). When search_repo_code matches are scattered across packages, narrow with its path argument (e.g. path="packages/foo") so you find the right one instead of unrelated hits.`;
   const add = extra?.trim();
   if (!add) return withGh;
   return (
