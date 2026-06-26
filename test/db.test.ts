@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { openDb, replaceDoc, search, buildMatchQuery, countChunks, dropWeakHits, pruneDocsNotIn } from "../src/kb/db.ts";
 import { chunkMarkdown } from "../src/kb/chunk.ts";
-import { isStaleKey } from "../src/kb/ingest.ts";
+import { isStaleKey, isReservedKey } from "../src/kb/ingest.ts";
 
 // openDb はパス指定だが ":memory:" でインメモリ DB を開ける（資格情報・ファイル不要）。
 function memDb(): Database {
@@ -72,4 +72,10 @@ test("isStaleKey は _stale 配下を判定", () => {
   expect(isStaleKey("knowledge/_stale/github-issues/x-y/1.md")).toBe(true);
   expect(isStaleKey("_stale/1.md")).toBe(true);
   expect(isStaleKey("knowledge/github-issues/x-y/1.md")).toBe(false);
+});
+
+test("isReservedKey は _config 配下を判定（追加プロンプト等を索引から外す）", () => {
+  expect(isReservedKey("_config/system-prompt.md")).toBe(true);
+  expect(isReservedKey("knowledge/_config/system-prompt.md")).toBe(true);
+  expect(isReservedKey("knowledge/system-prompt.md")).toBe(false);
 });

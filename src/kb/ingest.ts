@@ -19,11 +19,16 @@ export function isStaleKey(key: string): boolean {
   return key.startsWith("_stale/") || key.includes("/_stale/");
 }
 
+// _config/ 配下は Bot 設定（追加システムプロンプト等）。ナレッジではないため索引対象から除外する。
+export function isReservedKey(key: string): boolean {
+  return key.startsWith("_config/") || key.includes("/_config/");
+}
+
 export async function ingest(db: Database, cfg: S3Config, log: (m: string) => void = () => {}): Promise<IngestReport> {
   const s3 = new S3Client(cfg);
   const all = await s3.listKeys();
-  const mdKeys = all.filter((k) => k.toLowerCase().endsWith(".md") && !isStaleKey(k));
-  log(`列挙: ${all.length} 件中 .md（_stale 除く）は ${mdKeys.length} 件`);
+  const mdKeys = all.filter((k) => k.toLowerCase().endsWith(".md") && !isStaleKey(k) && !isReservedKey(k));
+  log(`列挙: ${all.length} 件中 .md（_stale/_config 除く）は ${mdKeys.length} 件`);
 
   let totalChunks = 0;
   const skipped: string[] = [];

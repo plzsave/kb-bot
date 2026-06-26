@@ -83,6 +83,23 @@ source of truth** for questions about an app's behavior, spec, or usage. It navi
 the relevant files, and cites paths + line numbers in its answer. Access is restricted to the
 allowlisted repos, and secret files (`.env`, `*.pem/key`, `secrets*`) and path traversal are refused.
 
+## Customizing the system prompt (no redeploy)
+
+The built-in base prompt (role, safety, output style) lives in code and answers in **the same language
+as the question** (Japanese question → Japanese answer, English → English). To tweak tone or policy
+without editing code or redeploying — e.g. "explain things more simply, avoid jargon" — append extra
+instructions from outside the image:
+
+- **R2/S3 object (default):** put a Markdown file at `KB_SYSTEM_PROMPT_KEY` (default
+  `_config/system-prompt.md`). It is fetched at request time with a short cache (`KB_SYSTEM_PROMPT_TTL_SEC`,
+  default 60s), so editing the object takes effect within the TTL **with no restart and no redeploy**.
+  Works the same on fly.io / ECS where files and env are awkward to edit in place. The `_config/` prefix
+  is excluded from ingest, so it never pollutes search.
+- **Inline (local/dev):** set `KB_SYSTEM_PROMPT_EXTRA`; when present it takes precedence and S3 is not read.
+
+The extra text is **appended** to the base prompt — the safety rules (treat retrieved content as
+reference, not instructions) always stay in effect.
+
 ## Usage
 
 ```bash
