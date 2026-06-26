@@ -59,7 +59,8 @@ Your question
 
 1. **Answer cache** (SQLite, exact match, default TTL 24h) — a hit skips the LLM entirely (the biggest
    saver). Tune with `KB_CACHE_TTL_HOURS`, `0` = never expire. Entries expire by default so stale docs
-   don't get served forever.
+   don't get served forever. The key also includes `provider:model`, so switching `KB_LLM_PROVIDER` /
+   `KB_MODEL` never serves an answer the old model generated — it re-generates on the new one.
 2. **FTS5/BM25 search** (`bun:sqlite` + morphological segmentation) — retrieval with zero embedding-API cost.
 3. **Prompt caching** — reuses the system prompt / tool definitions. Provider-specific but always on:
    Anthropic uses `cache_control: ephemeral`; Gemini and OpenAI cache automatically.
@@ -166,6 +167,41 @@ bun run start:discord    # Discord               or: bun run dev:discord
 
 Slack responds to channel mentions and DMs; Discord responds to mentions and DMs.
 
+## Keeping knowledge fresh (optional batch tools)
+
+Beyond serving answers, kb-bot ships two **optional** batch jobs that treat your knowledge as
+something with a lifecycle — it can be *grown* from existing history and *retired* when it goes stale.
+Both are plain CLIs you run on a schedule (cron / GitHub Actions / a periodic container); neither runs
+inside the bot, and you can ignore them entirely if you only hand-write docs.
+
+```bash
+# Grow: turn resolved GitHub issues into normalized Markdown knowledge (then ingest it)
+bun run kb:issues --repos owner/name        # writes summarized .md to R2/S3; incremental
+bun run kb:ingest                            # index the new docs into FTS5
+
+# Retire: flag knowledge that has likely gone stale (report-only by default)
+bun run kb:prune                             # report candidates; nothing is changed
+bun run kb:prune --apply                     # quarantine them to _stale/ (reversible), then re-ingest
+```
+
+- **`kb:issues` (grow).** Reads *closed* issues from `KB_ISSUE_REPOS` (separate from `KB_GITHUB_REPOS`),
+  has the LLM summarize each into a normalized `.md` with frontmatter (`repo`, `closed_at`,
+  `related_files`), and uploads it to R2/S3 — so tribal knowledge buried in issues becomes searchable.
+  It is **incremental** (a state file tracks each issue's `updated_at`; `KB_ISSUE_STATE_FILE`), skips
+  low-signal issues (`KB_ISSUE_MIN_COMMENTS`), and respects tombstones (won't resurrect a doc you
+  quarantined). Use `--dry-run` to preview, `--since`, `--max-issues`, `--model` to tune.
+- **`kb:prune` (retire).** Scans the docs in R2/S3 and flags likely-stale ones by combining signals:
+  **old** (`closed_at` older than `--age-years`), **unused** (no retrieval recorded recently —
+  every search logs which docs were retrieved), and **code_drift** (a doc's `related_files` no longer
+  exist on the repo's HEAD). It **never deletes**: by default it only reports; `--apply` *moves*
+  candidates to a `_stale/` prefix (excluded from search, and reversible by moving them back). Docs
+  without frontmatter (hand-written ones) are skipped, so this only ever touches machine-generated
+  knowledge.
+
+These compose into a loop: **`kb:issues` grows → `kb:ingest` indexes → answering logs usage →
+`kb:prune` retires the unused/drifted.** It's why "docs *can* age" (above) is a managed condition, not
+just a caveat.
+
 ## Self-hosting (Docker, always-on)
 
 Socket Mode keeps a persistent connection, so the process must stay running. A single container
@@ -214,6 +250,10 @@ src/
     segment.ts     TinySegmenter morphological segmentation (index/query)
     db.ts          FTS5(unicode61) index + BM25 search
     ingest.ts      ingest job
+    issueDoc.ts    issue → normalized Markdown (frontmatter, prompts)
+    prune.ts       staleness flag logic (pure; old / unused / code_drift)
+  issues.ts        GitHub issues/comments fetch (for kb:issues)
+  usage.ts         retrieval logging (powers kb:prune "unused")
   cache.ts         answer cache (SQLite)
   agent/
     agent.ts       tool-use loop (streaming, caching, usage)
@@ -226,7 +266,9 @@ src/
   index.ts         Slack (Bolt, Socket Mode) entry — wiring only
   discord.ts       Discord (discord.js) entry — wiring only
 scripts/
-  kb-ingest.ts / kb-search.ts   CLIs
+  kb-ingest.ts / kb-search.ts   core CLIs
+  issue-to-kb.ts / kb-prune.ts  knowledge lifecycle (grow / retire)
+  kb-eval.ts                    routing eval harness (live LLM + GitHub)
 Dockerfile             bun-based runtime image
 docker-entrypoint.sh   ingest on boot, then start the bot
 compose.yaml           minimal self-hosting setup (with a persistent volume)

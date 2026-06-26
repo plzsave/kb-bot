@@ -27,12 +27,15 @@ function normalize(q: string): string {
   return q.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function keyFor(q: string): string {
-  return createHash("sha256").update(normalize(q)).digest("hex");
+// キーは「namespace + 正規化質問」のハッシュ。namespace に provider:model を入れることで、
+// KB_MODEL/プロバイダを切り替えた後に旧モデルが生成した回答が配信されるのを防ぐ
+// （別 namespace＝別キー＝miss して新モデルで再生成される）。未指定なら "" で従来互換。
+function keyFor(q: string, namespace: string): string {
+  return createHash("sha256").update(`${namespace}\0${normalize(q)}`).digest("hex");
 }
 
-export function getCachedAnswer(db: Database, question: string): string | null {
-  const key = keyFor(question);
+export function getCachedAnswer(db: Database, question: string, namespace = ""): string | null {
+  const key = keyFor(question, namespace);
   const row = db.query("SELECT answer, created_at FROM answer_cache WHERE key = ?").get(key) as
     | { answer: string; created_at: number }
     | null;
@@ -46,9 +49,9 @@ export function getCachedAnswer(db: Database, question: string): string | null {
   return row.answer;
 }
 
-export function putCachedAnswer(db: Database, question: string, answer: string): void {
+export function putCachedAnswer(db: Database, question: string, answer: string, namespace = ""): void {
   db.run(
     "INSERT OR REPLACE INTO answer_cache (key, question, answer, created_at, hits) VALUES (?, ?, ?, ?, 0)",
-    [keyFor(question), question, answer, Date.now()],
+    [keyFor(question, namespace), question, answer, Date.now()],
   );
 }

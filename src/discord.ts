@@ -4,6 +4,7 @@ import { openDb, countChunks } from "./kb/db.ts";
 import { ensureCacheTable } from "./cache.ts";
 import { ensureUsageTable } from "./usage.ts";
 import { answer, type AnswerDeps, type HistoryTurn } from "./chat/core.ts";
+import { isPlaceholder } from "./chat/messages.ts";
 import { discordReply } from "./chat/discord.ts";
 import { loadGitHub } from "./github.ts";
 import { InFlightGuard } from "./inflight.ts";
@@ -44,7 +45,7 @@ const client = new Client({
 // 1 メッセージを履歴ターンへ（bot 自身は assistant・空/プレースホルダは除外）。
 function toTurn(m: any): HistoryTurn | null {
   const text = (m.content ?? "").replace(/<@[!&]?\d+>/g, " ").trim();
-  if (!text || text === "考え中… ⏳") return null;
+  if (!text || isPlaceholder(text)) return null;
   return { role: m.author?.id === client.user?.id ? "assistant" : "user", text };
 }
 
