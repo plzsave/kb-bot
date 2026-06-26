@@ -4,16 +4,71 @@
 
 const API = "https://api.github.com";
 const MAX_FILE = 32 * 1024; // 1 ファイル 32KB 上限（tool_result 肥大＝トークン爆発を防ぐ）
-const MAX_TREE = 800; // ツリー一覧の件数上限
+const MAX_TREE = 800; // ファイル一覧（小規模リポ/サブディレクトリ）の件数上限
+const MAX_OVERVIEW_DIRS = 60; // モノレポ概要で出すディレクトリ数の上限
+const MAX_MANIFESTS = 200; // モノレポ概要で出す manifest（パッケージの目印）数の上限
 const MAX_RANGE_LINES = 400; // 行範囲指定時の最大行数
+const SEARCH_RESULTS = 20; // コード検索の取得件数（モノレポで上位に埋もれないよう 10→20）
+
+// パッケージ/プロジェクトの根を示すファイル名。モノレポで「どこに何があるか」の地図になる。
+const MANIFEST =
+  /(^|\/)(package\.json|Cargo\.toml|go\.mod|pom\.xml|build\.gradle(\.kts)?|pyproject\.toml|setup\.py|Gemfile|composer\.json|[^/]+\.csproj)$/i;
 
 export interface GitHub {
   /** allowlist 内のリポか検証して正規化。NG は { error } を返す。 */
   resolveRepo(repo?: string): { repo: string } | { error: string };
-  listTree(repo: string): Promise<string>;
+  /** subdir 指定でその配下に絞る。未指定かつ大規模なら概要（地図）を返す。 */
+  listTree(repo: string, subdir?: string): Promise<string>;
   readFile(repo: string, path: string, startLine?: number, endLine?: number): Promise<string>;
-  searchCode(repo: string, query: string): Promise<string>;
+  /** path 指定で検索範囲をサブディレクトリに絞る（モノレポで該当パッケージだけ探す）。 */
+  searchCode(repo: string, query: string, path?: string): Promise<string>;
   repos: string[];
+}
+
+/**
+ * ツリー（blob パス一覧）を LLM 向け文字列に整形する純関数（ネットワーク非依存＝単体テスト可能）。
+ * - subdir 指定: その配下のファイルだけ列挙（モノレポで該当パッケージに絞る）。
+ * - 未指定で小規模（MAX_TREE 以下）: 全ファイルを列挙（従来挙動）。
+ * - 未指定で大規模（モノレポ）: トップ階層の概要＋manifest の場所を返し、subdir での深掘りを促す。
+ *   全ファイルを並べると MAX_TREE 件で切れて目的のパッケージが地図から消えるのを防ぐ。
+ */
+export function renderTree(paths: string[], subdir?: string): string {
+  if (paths.length === 0) return "（ファイルが見つかりません）";
+
+  if (subdir) {
+    const prefix = subdir.replace(/^\/+|\/+$/g, "") + "/";
+    const inDir = paths.filter((p) => p.startsWith(prefix));
+    if (inDir.length === 0) return `（${subdir} 配下にファイルが見つかりません）`;
+    const shown = inDir.slice(0, MAX_TREE).join("\n");
+    return inDir.length > MAX_TREE
+      ? `${shown}\n（…${MAX_TREE} 件で切り詰め。subdir をさらに絞ってください）`
+      : shown;
+  }
+
+  if (paths.length <= MAX_TREE) return paths.join("\n");
+
+  // 大規模（モノレポ）→ 地図にして subdir 深掘りへ誘導
+  const counts = new Map<string, number>();
+  for (const p of paths) {
+    const top = p.includes("/") ? p.slice(0, p.indexOf("/")) : "(root files)";
+    counts.set(top, (counts.get(top) ?? 0) + 1);
+  }
+  const dirs = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, MAX_OVERVIEW_DIRS)
+    .map(([dir, n]) => (dir === "(root files)" ? `(root files)  (${n})` : `${dir}/  (${n})`))
+    .join("\n");
+  const manifests = paths.filter((p) => MANIFEST.test(p)).slice(0, MAX_MANIFESTS);
+
+  return [
+    `（${paths.length} ファイルと大きいため概要を表示。subdir を指定して深掘りしてください）`,
+    "",
+    "## トップ階層（ディレクトリ / ファイル数）",
+    dirs,
+    "",
+    "## パッケージの目印（manifest の場所）",
+    manifests.length ? manifests.join("\n") : "（manifest が見つかりません）",
+  ].join("\n");
 }
 
 function headers(token: string | undefined): Record<string, string> {
@@ -76,7 +131,7 @@ export function createGitHub(token: string | undefined, repos: string[]): GitHub
       return { repo: norm };
     },
 
-    async listTree(repo) {
+    async listTree(repo, subdir) {
       try {
         const metaRes = await fetch(`${API}/repos/${repo}`, { headers: headers(token) });
         if (!metaRes.ok) return `（${repo} のメタ取得に失敗: HTTP ${metaRes.status}）`;
@@ -89,8 +144,10 @@ export function createGitHub(token: string | undefined, repos: string[]): GitHub
         const j = (await res.json()) as { tree?: { path?: string; type?: string }[]; truncated?: boolean };
         const paths = (j.tree ?? []).filter((t) => t.type === "blob" && t.path).map((t) => t.path as string);
         if (paths.length === 0) return `（${repo} にファイルが見つかりません）`;
-        const shown = paths.slice(0, MAX_TREE).join("\n");
-        return paths.length > MAX_TREE || j.truncated ? `${shown}\n（…${MAX_TREE} 件で切り詰め）` : shown;
+        const view = renderTree(paths, subdir);
+        return j.truncated
+          ? `${view}\n（注: GitHub 側でツリーが切り詰められています。一部ファイルが欠落している可能性）`
+          : view;
       } catch (e) {
         return `（${repo} のツリー取得でエラー: ${e instanceof Error ? e.message : "unknown"}）`;
       }
@@ -126,18 +183,24 @@ export function createGitHub(token: string | undefined, repos: string[]): GitHub
       }
     },
 
-    async searchCode(repo, query) {
+    async searchCode(repo, query, path) {
       if (!token) return "（コード検索には GITHUB_TOKEN が必要です。list_repo_tree + read_repo_file を使ってください）";
       try {
-        const q = encodeURIComponent(`${query} repo:${repo}`);
-        const res = await fetch(`${API}/search/code?q=${q}&per_page=10`, {
+        // path 指定時は path: 修飾子で範囲を絞る（モノレポで該当パッケージ配下だけ探す）。
+        const scope = path ? ` path:${path.replace(/^\/+|\/+$/g, "")}` : "";
+        const q = encodeURIComponent(`${query} repo:${repo}${scope}`);
+        const res = await fetch(`${API}/search/code?q=${q}&per_page=${SEARCH_RESULTS}`, {
           headers: { ...headers(token), Accept: "application/vnd.github.text-match+json" },
         });
         if (!res.ok) return `（${repo} のコード検索に失敗: HTTP ${res.status}）`;
-        const j = (await res.json()) as { items?: { path?: string }[] };
+        const j = (await res.json()) as { total_count?: number; items?: { path?: string }[] };
         const paths = (j.items ?? []).map((i) => i.path).filter(Boolean);
-        if (paths.length === 0) return `（"${query}" に一致するファイルは見つかりませんでした）`;
-        return `一致したファイル（read_repo_file で中身を読む）:\n${paths.join("\n")}`;
+        if (paths.length === 0) return `（"${query}"${path ? `（path:${path}）` : ""} に一致するファイルは見つかりませんでした）`;
+        const more =
+          (j.total_count ?? paths.length) > paths.length
+            ? `\n（全 ${j.total_count} 件中 上位 ${paths.length} 件。絞りたい時は path で範囲指定）`
+            : "";
+        return `一致したファイル（read_repo_file で中身を読む）:\n${paths.join("\n")}${more}`;
       } catch (e) {
         return `（${repo} のコード検索でエラー: ${e instanceof Error ? e.message : "unknown"}）`;
       }

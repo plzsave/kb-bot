@@ -16,14 +16,23 @@ export function githubTools(gh: GitHub): AgentTool[] {
         name: "list_repo_tree",
         description:
           "GitHub リポジトリのファイル一覧（パス）を取得する。" +
-          "アプリの構成を把握し、どのファイルを読むべきか当たりを付けるのに使う。",
-        parameters: { type: "object", properties: { ...repoProp }, required: [] },
+          "アプリの構成を把握し、どのファイルを読むべきか当たりを付けるのに使う。" +
+          "大規模（モノレポ）では全ファイルではなくトップ階層とパッケージの目印（manifest）の概要を返すので、" +
+          "そこで対象パッケージに当たりを付け、subdir（例: packages/foo）を指定して深掘りする。",
+        parameters: {
+          type: "object",
+          properties: {
+            ...repoProp,
+            subdir: { type: "string", description: "絞り込むサブディレクトリ（例: packages/foo・任意）" },
+          },
+          required: [],
+        },
       },
       async run(input) {
-        const { repo } = (input ?? {}) as { repo?: string };
+        const { repo, subdir } = (input ?? {}) as { repo?: string; subdir?: string };
         const r = gh.resolveRepo(repo);
         if ("error" in r) return `（${r.error}）`;
-        return gh.listTree(r.repo);
+        return gh.listTree(r.repo, subdir);
       },
     },
     {
@@ -62,22 +71,24 @@ export function githubTools(gh: GitHub): AgentTool[] {
         name: "search_repo_code",
         description:
           "GitHub リポジトリ内のコードをキーワード検索し、一致したファイルパスを返す。" +
-          "関数名・識別子・文言などから該当箇所を素早く見つけたい時に使う（その後 read_repo_file で読む）。",
+          "関数名・識別子・文言などから該当箇所を素早く見つけたい時に使う（その後 read_repo_file で読む）。" +
+          "モノレポでヒットが散らばる時は path（例: packages/foo）で検索範囲を該当パッケージに絞る。",
         parameters: {
           type: "object",
           properties: {
             ...repoProp,
             query: { type: "string", description: "検索キーワード（関数名・識別子・文言など）" },
+            path: { type: "string", description: "検索範囲を絞るサブディレクトリ（例: packages/foo・任意）" },
           },
           required: ["query"],
         },
       },
       async run(input) {
-        const { repo, query } = (input ?? {}) as { repo?: string; query?: string };
+        const { repo, query, path } = (input ?? {}) as { repo?: string; query?: string; path?: string };
         if (!query) return "（検索語が空でした）";
         const r = gh.resolveRepo(repo);
         if ("error" in r) return `（${r.error}）`;
-        return gh.searchCode(r.repo, query);
+        return gh.searchCode(r.repo, query, path);
       },
     },
   ];
