@@ -4,6 +4,7 @@ import { openDb, countChunks } from "./kb/db.ts";
 import { ensureCacheTable } from "./cache.ts";
 import { ensureUsageTable } from "./usage.ts";
 import { answer, type AnswerDeps, type HistoryTurn } from "./chat/core.ts";
+import { isPlaceholder } from "./chat/messages.ts";
 import { slackReply } from "./chat/slack.ts";
 import { loadGitHub } from "./github.ts";
 import { InFlightGuard } from "./inflight.ts";
@@ -19,7 +20,7 @@ function toHistory(messages: any[], botUserId: string | undefined, skipTs?: stri
     if (skipTs && m.ts === skipTs) continue; // 今回の発言自体は履歴に入れない
     if (m.subtype) continue;
     const text = (m.text ?? "").replace(/<@[^>]+>/g, " ").trim();
-    if (!text || text === "考え中… ⏳") continue;
+    if (!text || isPlaceholder(text)) continue;
     const isBot = Boolean(m.bot_id) || (botUserId != null && m.user === botUserId);
     turns.push({ role: isBot ? "assistant" : "user", text });
   }

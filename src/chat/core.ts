@@ -7,6 +7,7 @@ import { runAgent, type AgentTool, type RunAgentOpts, type RunAgentResult } from
 import { searchKnowledgeTool, formatHits } from "../agent/tools.ts";
 import { githubTools } from "../agent/githubTools.ts";
 import { isModelNotFoundError } from "../llm/errors.ts";
+import { uiText } from "./messages.ts";
 import type { GitHub } from "../github.ts";
 
 // プラットフォーム非依存の回答コア。
@@ -126,24 +127,29 @@ export async function answer(
   if (!q) return;
   const { db, provider, model, modelHard, github } = deps;
   const hasContext = history.length > 0;
+  // Bot の外枠文言（プレースホルダ・エラー等）は質問と同じ言語に合わせる（回答本文と齟齬を出さない）。
+  const ui = uiText(q);
   // 追加システムプロンプトは 1 回の回答につき一度だけ解決する（実体は TTL キャッシュ付きで再起動不要）。
   const systemExtra = deps.loadSystemExtra ? await deps.loadSystemExtra() : "";
   // 上位ティアが基本と別物として設定されている時だけ昇格しうる（未設定/同一なら無効＝現状互換）。
   const canEscalate = !!modelHard && modelHard !== model;
+  // 回答キャッシュの namespace。プロバイダ/基本モデルを切り替えたら旧回答を配信しない
+  // （別 namespace＝別キー）。昇格やフォールバックで実際に答えたティアではなく、この設定が起点の同一性。
+  const cacheNs = `${provider.name}:${model}`;
 
   // ① 回答キャッシュ（完全一致）→ ヒットなら LLM を呼ばない＝最大の節約。
   //    ただし会話の続き（文脈あり）は同じ問い文でも答えが変わるためキャッシュしない。
   if (!hasContext) {
-    const cached = getCachedAnswer(db, q);
+    const cached = getCachedAnswer(db, q, cacheNs);
     if (cached) {
-      await reply.send(`${cached}\n\n_（キャッシュ応答）_`);
+      await reply.send(`${cached}\n\n${ui.cacheTag}`);
       return;
     }
   }
 
   // プレースホルダを起票し、以降この handle を書き換えていく
   // 絵文字は Slack/Discord 双方で表示できる Unicode を使う（:shortcode: は Slack 専用）。
-  const handle = await reply.send("考え中… ⏳");
+  const handle = await reply.send(ui.thinking);
 
   // ② FTS5/BM25 で関連チャンクを取得し初期コンテキストに前置き（埋め込み課金ゼロ）
   const hits = search(db, q, TOP_K);
@@ -205,15 +211,15 @@ export async function answer(
     //    「ナレッジに無い」自己申告では昇格しない（上位でも知識は増えず無駄打ちになるため）。
     if (!startHard && canEscalate && result.truncated) {
       escalated = true;
-      await handle.update("じっくり考え中… ⏳");
+      await handle.update(ui.thinkingHard);
       ({ result, modelUsed, fellBack } = await runOnce(modelHard!));
     }
 
-    const finalText = result.text.trim() || "（回答を生成できませんでした）";
+    const finalText = result.text.trim() || ui.empty;
     await handle.update(finalText);
 
     // ④ キャッシュ保存＋使用量ログ（truncated は不完全・文脈ありは再利用不可なのでキャッシュしない）
-    if (!hasContext && !result.truncated && result.text.trim()) putCachedAnswer(db, q, finalText);
+    if (!hasContext && !result.truncated && result.text.trim()) putCachedAnswer(db, q, finalText, cacheNs);
     const u = result.usage;
     console.log(
       `[usage] model=${modelUsed} escalated=${escalated} fellBack=${fellBack} ` +
@@ -223,7 +229,7 @@ export async function answer(
   } catch (e) {
     console.error("[answer] エラー:", e);
     try {
-      await handle.update("⚠️ 回答の生成中にエラーが発生しました。少し時間をおいて、もう一度お試しください。");
+      await handle.update(ui.error);
     } catch {
       /* 通知メッセージの更新自体が失敗した場合は諦める */
     }

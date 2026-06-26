@@ -26,6 +26,21 @@ If your change touches the container, also confirm it builds:
 docker build -t kb-bot:dev .
 ```
 
+### Routing eval (when you touch retrieval/routing)
+
+`typecheck` + `test` are pure and credential-free, so CI runs only those. The routing/monorepo
+behavior (docs-vs-code, drilling into the right package) depends on a live LLM and GitHub, so it
+lives in a separate harness that is **not** in CI (it costs money and needs keys):
+
+```bash
+# needs the selected provider's API key + KB_GITHUB_REPOS (the sample cases target plzsave/kb-bot)
+bun run kb:ingest          # so the docs cases have something to match
+bun run kb:eval            # scores eval/cases.json; exits non-zero on any FAIL
+```
+
+Run it before merging changes to `src/chat/core.ts` (system prompt / routing), `src/agent/`,
+or `src/github.ts`, and add a case to `eval/cases.json` when you add a routing behavior.
+
 ## Guidelines
 
 - **Dependencies:** never hand-write versions in `package.json`. Use `bun add <pkg>` /
