@@ -13,6 +13,7 @@
     "kb:search": "bun run scripts/kb-search.ts",
     "kb:issues": "bun run scripts/issue-to-kb.ts",
     "kb:prune": "bun run scripts/kb-prune.ts",
+    "kb:eval": "bun run scripts/kb-eval.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },
