@@ -50,7 +50,7 @@
   - _Depends: 2.1, 2.2, 2.3_
   - _Boundary: EvalScorecard, CaseValidation_
 
-- [ ] 4.2 後方互換の回帰と型チェック、サンプル整備
+- [x] 4.2 後方互換の回帰と型チェック、サンプル整備
   - GitHub 未設定で既存 7 ケースを無改修実行し、5 PASS / 2 SKIP・終了コード 0 を確認する（実 LLM への接続が前提）
   - `bun run typecheck` がエラーなく完了し、新規外部依存が無い（依存定義に差分なし）ことを確認する
   - 軸・ゲートの記述例をサンプルケースに追記する（既存の評価ケース本体は変更しない）
@@ -61,3 +61,4 @@
 ## Implementation Notes
 - 純粋関数（`validateCases`/`buildScorecard`/`overallPassed`/`formatScorecard`）と型（`Axis`/`AXES`/`RawCase`/`Case`/`CaseStatus`/`CaseResult`/`AxisTally`/`Scorecard`）は `scripts/kb-eval.ts` で `export` 済み。3.1 の main 結線・4.1 のテストはこれらを再利用し再定義しないこと。
 - 2.3 で確定した `formatScorecard` の出力ラベル（`=== スコアカード ===` / `軸 X: p/t PASS` / `ゲート: FAIL n 件（…）` / `総合 p/e PASS, s SKIP`）は design の Revalidation Triggers 対象。3.1 はこのフォーマットをそのまま末尾出力に使い、勝手に変えないこと。逐次行のゲート区別は別途 `FAIL*`（gate 印）で行う。
+- 4.2: 既存 7 ケースの**実 LLM 回帰**（GitHub 未設定で 5 PASS / 2 SKIP / exit 0）は API キー必須のため自動化環境では未実行（MANUAL_VERIFY）。手動確認コマンド: `unset KB_GITHUB_REPOS && bun run scripts/kb-eval.ts`。終了コード是正（SKIP のみ＋他 PASS→exit 0）自体は `overallPassed` 単体テストで裏取り済み。

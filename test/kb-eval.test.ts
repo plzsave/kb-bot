@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   buildScorecard,
   formatScorecard,
@@ -76,6 +77,12 @@ test("validateCases は gate が真偽値以外なら不正として報告する
   const errors = validateCases(cases);
   expect(errors.length).toBeGreaterThan(0);
   expect(errors.some((e) => e.includes("bad"))).toBe(true);
+});
+
+test("eval/cases.sample.json は validateCases を通過する（軸/ゲートのサンプルが妥当）", () => {
+  // サンプルに記す軸/ゲートの使用例が常に有効な値であることを保証する恒久ガード（Req 4.1 の境界外で、サンプルのみを検証）。
+  const sample = JSON.parse(readFileSync(new URL("../eval/cases.sample.json", import.meta.url), "utf8")) as RawCase[];
+  expect(validateCases(sample)).toEqual([]);
 });
 
 test("validateCases は入力を変更しない（純粋）", () => {
