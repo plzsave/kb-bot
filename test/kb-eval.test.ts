@@ -3,6 +3,7 @@ import {
   buildScorecard,
   formatScorecard,
   overallPassed,
+  statusLabel,
   validateCases,
   type CaseResult,
   type RawCase,
@@ -162,6 +163,18 @@ test("buildScorecard は入力を変更しない（純粋）", () => {
   const snapshot = JSON.stringify(results);
   buildScorecard(results);
   expect(JSON.stringify(results)).toBe(snapshot);
+});
+
+test("statusLabel はゲートの FAIL/ERROR に印を付けてスコア軸の FAIL と区別する", () => {
+  // 非ゲートは素のステータスのまま。
+  expect(statusLabel("FAIL", false)).toBe("FAIL");
+  expect(statusLabel("ERROR", false)).toBe("ERROR");
+  // ゲートの失敗（FAIL/ERROR）は印付きで区別可能に（Req 2.3）。
+  expect(statusLabel("FAIL", true)).toBe("FAIL*");
+  expect(statusLabel("ERROR", true)).toBe("ERROR*");
+  // PASS/SKIP はゲートでも印を付けない（失敗ではないため）。
+  expect(statusLabel("PASS", true)).toBe("PASS");
+  expect(statusLabel("SKIP", true)).toBe("SKIP");
 });
 
 function scorecard(overrides: Partial<Scorecard>): Scorecard {

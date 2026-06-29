@@ -274,19 +274,39 @@ export function formatScorecard(sc: Scorecard): string {
   return lines.join("\n");
 }
 
+/**
+ * 逐次行の先頭ラベルを返す純粋関数。ゲートケースの失敗（FAIL/ERROR）には印（`*`）を付け、
+ * スコア軸の FAIL とひと目で区別できるようにする（Req 2.3）。PASS/SKIP は失敗ではないため印を付けない。
+ * 副作用なし・入力不変。
+ */
+export function statusLabel(status: CaseStatus, gate: boolean): string {
+  if (gate && (status === "FAIL" || status === "ERROR")) return `${status}*`;
+  return status;
+}
+
 // --- main ---
 // 実 LLM/GitHub に触れる副作用はすべてこの main() 内に閉じ、直接実行時のみ走らせる。
 // これにより test 等が本モジュールを import しても LLM/GitHub 呼び出しは発生しない。
 async function main() {
   const casesPath = process.argv[2] ?? "./eval/cases.json";
-  let cases: Case[];
+  let raw: RawCase[];
   try {
-    cases = JSON.parse(readFileSync(casesPath, "utf8")) as Case[];
+    raw = JSON.parse(readFileSync(casesPath, "utf8")) as RawCase[];
   } catch (e) {
     console.error(`ケース読込に失敗: ${casesPath} (${(e as Error).message})`);
     console.error("例は eval/cases.sample.json を参照してください。");
     process.exit(1);
   }
+
+  // 集計へ流す前に軸/ゲートを検証する。不正があれば内容を出力して非ゼロ終了（黙って集計しない、Req 1.4）。
+  const validationErrors = validateCases(raw);
+  if (validationErrors.length > 0) {
+    console.error("ケース定義に不正があります:");
+    for (const err of validationErrors) console.error(`  - ${err}`);
+    process.exit(1);
+  }
+  // 検証成功後に Case[] へ narrow（validateCases 通過＝axis は有効値・gate は真偽値）。
+  const cases = raw as Case[];
 
   const { provider, model } = createLlm();
   const db = openDb(dbPath());
@@ -295,10 +315,11 @@ async function main() {
     `eval: provider=${provider.name} model=${model} github=${github ? github.repos.join(",") : "off"} / ${cases.length} ケース\n`,
   );
 
-  let passed = 0;
+  const results: CaseResult[] = [];
   const startedAt = Date.now();
 
   for (const c of cases) {
+    const gate = c.gate ?? false;
     // GitHub ツールを期待するケースは GitHub 未設定ならスキップ（誤った FAIL を避ける）。
     const needsGh =
       c.expect.source === "code" ||
@@ -307,7 +328,8 @@ async function main() {
       (c.expect.toolsUsedAll ?? []).some((t) => GH_TOOLS.has(t)) ||
       !!c.expect.readPathIncludes;
     if (needsGh && !github) {
-      console.log(`SKIP  ${c.name} … GitHub 未設定（KB_GITHUB_REPOS）`);
+      console.log(`${statusLabel("SKIP", gate)}  ${c.name} … GitHub 未設定（KB_GITHUB_REPOS）`);
+      results.push({ name: c.name, axis: c.axis, gate, status: "SKIP", fails: [] });
       continue;
     }
 
@@ -333,21 +355,24 @@ async function main() {
       });
       const fails = evalCase(c.expect, calls, result.text);
       const trace = calls.map((c) => c.name).join(" → ") || "（ツール未使用）";
-      if (fails.length === 0) {
-        passed++;
-        console.log(`PASS  ${c.name}  [${trace}]`);
-      } else {
-        console.log(`FAIL  ${c.name}  [${trace}]`);
-        for (const f of fails) console.log(`        - ${f}`);
-      }
+      const status: CaseStatus = fails.length === 0 ? "PASS" : "FAIL";
+      console.log(`${statusLabel(status, gate)}  ${c.name}  [${trace}]`);
+      for (const f of fails) console.log(`        - ${f}`);
+      results.push({ name: c.name, axis: c.axis, gate, status, fails });
     } catch (e) {
-      console.log(`ERROR ${c.name}: ${(e as Error).message}`);
+      const message = (e as Error).message;
+      console.log(`${statusLabel("ERROR", gate)} ${c.name}: ${message}`);
+      results.push({ name: c.name, axis: c.axis, gate, status: "ERROR", fails: [message] });
     }
   }
 
+  const sc = buildScorecard(results);
   const secs = ((Date.now() - startedAt) / 1000).toFixed(1);
-  console.log(`\n=== ${passed}/${cases.length} PASS (${secs}s) ===`);
-  process.exit(passed === cases.length ? 0 : 1);
+  // 末尾にスコアカードを追加表示（評価済み基準の総合行を含む、Req 3.1/3.3）。
+  console.log(`\n${formatScorecard(sc)}`);
+  console.log(`（所要 ${secs}s）`);
+  // 終了コードは評価済み全 PASS かつゲート失敗なしのみ 0（SKIP を分母に含めない、Req 2.2/2.4/5.2）。
+  process.exit(overallPassed(sc) ? 0 : 1);
 }
 
 if (import.meta.main) await main();
