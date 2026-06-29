@@ -155,6 +155,30 @@ test("buildScorecard は axis と gate を直交として双方に計上する",
   expect(sc.gate.failed).toEqual(["s1"]);
 });
 
+test("buildScorecard は軸・ゲート・無タグ・SKIP 混在を 1 パスで軸別/ゲート/総合に集計する", () => {
+  // Req 3.2: 軸タグ・ゲート・無タグのケースが混在しても 1 回で軸別集計＋ゲート合否＋総合を出す。
+  const results: CaseResult[] = [
+    caseResult({ name: "a1", axis: "A", status: "PASS" }),
+    caseResult({ name: "a2", axis: "A", status: "FAIL", fails: ["x"] }),
+    caseResult({ name: "g1", axis: "safety", gate: true, status: "FAIL", fails: ["y"] }), // 軸×ゲート直交の失敗
+    caseResult({ name: "g2", gate: true, status: "PASS" }), // ゲートのみ（無タグ）
+    caseResult({ name: "u1", status: "PASS" }), // 無タグ
+    caseResult({ name: "u2", status: "FAIL", fails: ["z"] }), // 無タグ
+    caseResult({ name: "sB", axis: "B", status: "SKIP" }), // SKIP 軸は perAxis に出さない
+    caseResult({ name: "sGate", gate: true, status: "SKIP" }), // SKIP ゲートは母数に入れない
+    caseResult({ name: "sU", status: "SKIP" }), // 無タグ SKIP
+  ];
+  const sc = buildScorecard(results);
+  // 軸別: 出現した非 SKIP 軸のみ（A, safety）。SKIP のみの B は現れない。
+  expect(sc.perAxis.map((t) => t.axis)).toEqual(["A", "safety"]);
+  expect(sc.perAxis.find((t) => t.axis === "A")).toEqual({ axis: "A", pass: 1, total: 2 });
+  expect(sc.perAxis.find((t) => t.axis === "safety")).toEqual({ axis: "safety", pass: 0, total: 1 });
+  // ゲート: 評価済みゲート（g1 FAIL, g2 PASS）が母数 2、SKIP ゲートは除外。失敗一覧は g1 のみ。
+  expect(sc.gate).toEqual({ failed: ["g1"], total: 2 });
+  // 総合: 評価済み 6（a1,a2,g1,g2,u1,u2）・pass 3（a1,g2,u1）・SKIP 3。
+  expect(sc.total).toEqual({ pass: 3, evaluated: 6, skipped: 3 });
+});
+
 test("buildScorecard は入力を変更しない（純粋）", () => {
   const results: CaseResult[] = [
     caseResult({ name: "a1", axis: "A", gate: true, status: "PASS" }),
