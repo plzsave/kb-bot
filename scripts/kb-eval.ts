@@ -41,7 +41,7 @@ type Axis = "A" | "B" | "C" | "D" | "safety";
 const AXES = ["A", "B", "C", "D", "safety"] as const;
 
 /** JSON 直後の緩い形状。axis/gate は未検証なので Axis に narrow しない（検証は後続タスク）。 */
-interface RawCase {
+export interface RawCase {
   name: string;
   question: string;
   expect: Expect;
@@ -121,6 +121,26 @@ function evalCase(expect: Expect, calls: Call[], answer: string): string[] {
   }
 
   return fails;
+}
+
+/**
+ * 読込直後の生ケース列を検証し、不正な評価軸／ゲート指定のエラー文（日本語）を配列で返す。
+ * 副作用なし・入力不変。戻り値が空配列なら呼び出し側は安全に Case[] へ narrow できる。
+ * 検証を AXES への narrow より前に置くことで、不正値が黙って集計へ流れ込むのを防ぐ（Req 1.4）。
+ */
+export function validateCases(cases: RawCase[]): string[] {
+  const errors: string[] = [];
+  for (const c of cases) {
+    // axis は省略可。指定された場合のみ許容集合への所属を検査する。
+    if (c.axis !== undefined && !(AXES as readonly string[]).includes(c.axis)) {
+      errors.push(`ケース "${c.name}": 不正な評価軸 "${c.axis}"（許容: ${AXES.join("|")}）`);
+    }
+    // gate は省略時 false 扱い。指定された場合は真偽値であること（防御的・最小）。
+    if (c.gate !== undefined && typeof c.gate !== "boolean") {
+      errors.push(`ケース "${c.name}": gate は真偽値である必要があります（受領: ${JSON.stringify(c.gate)}）`);
+    }
+  }
+  return errors;
 }
 
 // --- main ---
