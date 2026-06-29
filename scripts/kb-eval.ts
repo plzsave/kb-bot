@@ -36,10 +36,26 @@ interface Expect {
   answerOmits?: string[];
 }
 
+/** 評価軸の許容集合。スコアカードはこの軸ごとに到達度を集計する。 */
+type Axis = "A" | "B" | "C" | "D" | "safety";
+const AXES = ["A", "B", "C", "D", "safety"] as const;
+
+/** JSON 直後の緩い形状。axis/gate は未検証なので Axis に narrow しない（検証は後続タスク）。 */
+interface RawCase {
+  name: string;
+  question: string;
+  expect: Expect;
+  axis?: string; // 未検証。validateCases 通過後に Axis へ narrow
+  gate?: unknown; // 未検証。boolean 以外は不正
+}
+
+/** 検証済みケース。axis は有効な Axis、gate は boolean に確定。 */
 interface Case {
   name: string;
   question: string;
   expect: Expect;
+  axis?: Axis; // 省略時は無タグ（総合のみに数える）
+  gate?: boolean; // 省略時は false
 }
 
 interface Call {
@@ -108,73 +124,79 @@ function evalCase(expect: Expect, calls: Call[], answer: string): string[] {
 }
 
 // --- main ---
-const casesPath = process.argv[2] ?? "./eval/cases.json";
-let cases: Case[];
-try {
-  cases = JSON.parse(readFileSync(casesPath, "utf8")) as Case[];
-} catch (e) {
-  console.error(`ケース読込に失敗: ${casesPath} (${(e as Error).message})`);
-  console.error("例は eval/cases.sample.json を参照してください。");
-  process.exit(1);
-}
-
-const { provider, model } = createLlm();
-const db = openDb(dbPath());
-const github = loadGitHub();
-console.log(
-  `eval: provider=${provider.name} model=${model} github=${github ? github.repos.join(",") : "off"} / ${cases.length} ケース\n`,
-);
-
-let passed = 0;
-const startedAt = Date.now();
-
-for (const c of cases) {
-  // GitHub ツールを期待するケースは GitHub 未設定ならスキップ（誤った FAIL を避ける）。
-  const needsGh =
-    c.expect.source === "code" ||
-    c.expect.source === "both" ||
-    (c.expect.toolsUsedAny ?? []).some((t) => GH_TOOLS.has(t)) ||
-    (c.expect.toolsUsedAll ?? []).some((t) => GH_TOOLS.has(t)) ||
-    !!c.expect.readPathIncludes;
-  if (needsGh && !github) {
-    console.log(`SKIP  ${c.name} … GitHub 未設定（KB_GITHUB_REPOS）`);
-    continue;
-  }
-
-  const calls: Call[] = [];
-  const tools: AgentTool[] = [
-    recordTool(searchKnowledgeTool(db), calls),
-    ...(github ? githubTools(github).map((t) => recordTool(t, calls)) : []),
-  ];
-
-  // 本番と同じ初期コンテキスト（FTS 上位）＋system を組み立てる。
-  const hits = search(db, c.question, TOP_K);
-  const initialPrompt = `# 初期コンテキスト（FTS検索の上位${hits.length}件）\n\n${formatHits(hits)}\n\n# 質問\n${c.question}`;
-  const messages: LlmMessage[] = [{ role: "user", content: initialPrompt }];
-
+// 実 LLM/GitHub に触れる副作用はすべてこの main() 内に閉じ、直接実行時のみ走らせる。
+// これにより test 等が本モジュールを import しても LLM/GitHub 呼び出しは発生しない。
+async function main() {
+  const casesPath = process.argv[2] ?? "./eval/cases.json";
+  let cases: Case[];
   try {
-    const result = await runAgent({
-      provider,
-      model,
-      system: buildSystem(github),
-      messages,
-      tools,
-      maxTurns: github ? 8 : 5,
-    });
-    const fails = evalCase(c.expect, calls, result.text);
-    const trace = calls.map((c) => c.name).join(" → ") || "（ツール未使用）";
-    if (fails.length === 0) {
-      passed++;
-      console.log(`PASS  ${c.name}  [${trace}]`);
-    } else {
-      console.log(`FAIL  ${c.name}  [${trace}]`);
-      for (const f of fails) console.log(`        - ${f}`);
-    }
+    cases = JSON.parse(readFileSync(casesPath, "utf8")) as Case[];
   } catch (e) {
-    console.log(`ERROR ${c.name}: ${(e as Error).message}`);
+    console.error(`ケース読込に失敗: ${casesPath} (${(e as Error).message})`);
+    console.error("例は eval/cases.sample.json を参照してください。");
+    process.exit(1);
   }
+
+  const { provider, model } = createLlm();
+  const db = openDb(dbPath());
+  const github = loadGitHub();
+  console.log(
+    `eval: provider=${provider.name} model=${model} github=${github ? github.repos.join(",") : "off"} / ${cases.length} ケース\n`,
+  );
+
+  let passed = 0;
+  const startedAt = Date.now();
+
+  for (const c of cases) {
+    // GitHub ツールを期待するケースは GitHub 未設定ならスキップ（誤った FAIL を避ける）。
+    const needsGh =
+      c.expect.source === "code" ||
+      c.expect.source === "both" ||
+      (c.expect.toolsUsedAny ?? []).some((t) => GH_TOOLS.has(t)) ||
+      (c.expect.toolsUsedAll ?? []).some((t) => GH_TOOLS.has(t)) ||
+      !!c.expect.readPathIncludes;
+    if (needsGh && !github) {
+      console.log(`SKIP  ${c.name} … GitHub 未設定（KB_GITHUB_REPOS）`);
+      continue;
+    }
+
+    const calls: Call[] = [];
+    const tools: AgentTool[] = [
+      recordTool(searchKnowledgeTool(db), calls),
+      ...(github ? githubTools(github).map((t) => recordTool(t, calls)) : []),
+    ];
+
+    // 本番と同じ初期コンテキスト（FTS 上位）＋system を組み立てる。
+    const hits = search(db, c.question, TOP_K);
+    const initialPrompt = `# 初期コンテキスト（FTS検索の上位${hits.length}件）\n\n${formatHits(hits)}\n\n# 質問\n${c.question}`;
+    const messages: LlmMessage[] = [{ role: "user", content: initialPrompt }];
+
+    try {
+      const result = await runAgent({
+        provider,
+        model,
+        system: buildSystem(github),
+        messages,
+        tools,
+        maxTurns: github ? 8 : 5,
+      });
+      const fails = evalCase(c.expect, calls, result.text);
+      const trace = calls.map((c) => c.name).join(" → ") || "（ツール未使用）";
+      if (fails.length === 0) {
+        passed++;
+        console.log(`PASS  ${c.name}  [${trace}]`);
+      } else {
+        console.log(`FAIL  ${c.name}  [${trace}]`);
+        for (const f of fails) console.log(`        - ${f}`);
+      }
+    } catch (e) {
+      console.log(`ERROR ${c.name}: ${(e as Error).message}`);
+    }
+  }
+
+  const secs = ((Date.now() - startedAt) / 1000).toFixed(1);
+  console.log(`\n=== ${passed}/${cases.length} PASS (${secs}s) ===`);
+  process.exit(passed === cases.length ? 0 : 1);
 }
 
-const secs = ((Date.now() - startedAt) / 1000).toFixed(1);
-console.log(`\n=== ${passed}/${cases.length} PASS (${secs}s) ===`);
-process.exit(passed === cases.length ? 0 : 1);
+if (import.meta.main) await main();
