@@ -24,7 +24,7 @@
   - _Requirements: 1.1, 1.2, 1.3, 2.1, 3.2, 5.2, 5.3_
   - _Boundary: EvalScorecard_
 
-- [ ] 2.3 全体合否の判定とスコアカードの整形を実装する
+- [x] 2.3 全体合否の判定とスコアカードの整形を実装する
   - スコアカードから全体合否を「評価済み全 PASS かつ ゲート失敗なし」で導く純粋判定を実装する
   - スコアカードを末尾表示用の文字列（軸別行＋ゲート行＋総合行）に整形し、総合行は評価済み基準で PASS 数・SKIP 数を明示する（既存の総合 PASS 数を保持）
   - 完了状態: ゲート失敗ありで合否判定が不合格になり、整形出力に軸別行・ゲート行・総合 PASS 数が含まれる
@@ -57,3 +57,7 @@
   - 完了状態: 既存ケースが無改修で回帰し、型チェックが通り、サンプルに軸/ゲートの使用例が示される
   - _Requirements: 4.1, 4.3, 4.4, 5.1_
   - _Depends: 3.1_
+
+## Implementation Notes
+- 純粋関数（`validateCases`/`buildScorecard`/`overallPassed`/`formatScorecard`）と型（`Axis`/`AXES`/`RawCase`/`Case`/`CaseStatus`/`CaseResult`/`AxisTally`/`Scorecard`）は `scripts/kb-eval.ts` で `export` 済み。3.1 の main 結線・4.1 のテストはこれらを再利用し再定義しないこと。
+- 2.3 で確定した `formatScorecard` の出力ラベル（`=== スコアカード ===` / `軸 X: p/t PASS` / `ゲート: FAIL n 件（…）` / `総合 p/e PASS, s SKIP`）は design の Revalidation Triggers 対象。3.1 はこのフォーマットをそのまま末尾出力に使い、勝手に変えないこと。逐次行のゲート区別は別途 `FAIL*`（gate 印）で行う。

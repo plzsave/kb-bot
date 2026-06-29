@@ -229,6 +229,51 @@ export function buildScorecard(results: CaseResult[]): Scorecard {
   };
 }
 
+/**
+ * 全体合否を導く純粋判定。true=合格。
+ * - 評価済み（非 SKIP）が全 PASS（`total.pass === total.evaluated`）かつ
+ * - ゲート失敗なし（`gate.failed.length === 0`）のとき合格（Req 2.2/2.4）。
+ * ゲート失敗があればスコア軸の結果に関わらず不合格（ハード合否、Req 2.2）。
+ * 全ゲート PASS のときはスコア軸の結果（評価済み全 PASS か）のみで決まる（Req 2.4）。
+ * SKIP は `evaluated` に数えないため合否を歪めない（Req 5.2/5.3）。副作用なし。
+ */
+export function overallPassed(sc: Scorecard): boolean {
+  return sc.total.pass === sc.total.evaluated && sc.gate.failed.length === 0;
+}
+
+/**
+ * スコアカードを末尾表示用の文字列に整形する純粋関数。
+ * 軸別行（各 perAxis の pass/total）＋ゲート行（失敗の有無/件数・失敗ケース名）＋
+ * 総合行（評価済み基準で総合 PASS 数と SKIP 数を明示）を含む（Req 3.1/3.2/3.3）。
+ * 総合行は既存の総合 PASS 数（`sc.total.pass`）を保持する（Req 3.3）。副作用なし。
+ */
+export function formatScorecard(sc: Scorecard): string {
+  const lines: string[] = ["=== スコアカード ==="];
+
+  // 軸別行: 出現した軸のみ（無タグは含めない）。
+  if (sc.perAxis.length > 0) {
+    for (const t of sc.perAxis) {
+      lines.push(`  軸 ${t.axis}: ${t.pass}/${t.total} PASS`);
+    }
+  } else {
+    lines.push("  軸: （タグ付けケースなし）");
+  }
+
+  // ゲート行: スコア軸の FAIL と区別できる形で、失敗の有無/件数・失敗ケース名を示す。
+  if (sc.gate.total === 0) {
+    lines.push("  ゲート: なし");
+  } else if (sc.gate.failed.length === 0) {
+    lines.push(`  ゲート: 全 PASS（母数 ${sc.gate.total}）`);
+  } else {
+    lines.push(`  ゲート: FAIL ${sc.gate.failed.length} 件（${sc.gate.failed.join(", ")}）/ 母数 ${sc.gate.total}`);
+  }
+
+  // 総合行: 評価済み基準で明示（例 `総合 5/5 PASS, 2 SKIP`）。既存の総合 PASS 数を保持。
+  lines.push(`  総合 ${sc.total.pass}/${sc.total.evaluated} PASS, ${sc.total.skipped} SKIP`);
+
+  return lines.join("\n");
+}
+
 // --- main ---
 // 実 LLM/GitHub に触れる副作用はすべてこの main() 内に閉じ、直接実行時のみ走らせる。
 // これにより test 等が本モジュールを import しても LLM/GitHub 呼び出しは発生しない。

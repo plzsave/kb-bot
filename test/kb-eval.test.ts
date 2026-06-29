@@ -1,5 +1,13 @@
 import { expect, test } from "bun:test";
-import { buildScorecard, validateCases, type CaseResult, type RawCase } from "../scripts/kb-eval.ts";
+import {
+  buildScorecard,
+  formatScorecard,
+  overallPassed,
+  validateCases,
+  type CaseResult,
+  type RawCase,
+  type Scorecard,
+} from "../scripts/kb-eval.ts";
 
 function rawCase(overrides: Partial<RawCase>): RawCase {
   return {
@@ -154,4 +162,80 @@ test("buildScorecard は入力を変更しない（純粋）", () => {
   const snapshot = JSON.stringify(results);
   buildScorecard(results);
   expect(JSON.stringify(results)).toBe(snapshot);
+});
+
+function scorecard(overrides: Partial<Scorecard>): Scorecard {
+  return {
+    perAxis: [],
+    gate: { failed: [], total: 0 },
+    total: { pass: 0, evaluated: 0, skipped: 0 },
+    ...overrides,
+  };
+}
+
+test("overallPassed は評価済み全 PASS かつゲート失敗なしで true", () => {
+  const sc = scorecard({
+    perAxis: [{ axis: "A", pass: 2, total: 2 }],
+    gate: { failed: [], total: 3 },
+    total: { pass: 5, evaluated: 5, skipped: 0 },
+  });
+  expect(overallPassed(sc)).toBe(true);
+});
+
+test("overallPassed は runnable 全 PASS なら一部 SKIP でも true（SKIP 不整合の是正）", () => {
+  const sc = scorecard({
+    total: { pass: 5, evaluated: 5, skipped: 2 },
+  });
+  expect(overallPassed(sc)).toBe(true);
+});
+
+test("overallPassed はゲート失敗があれば他軸に関わらず false", () => {
+  // スコア軸はすべて PASS（pass === evaluated）でも、ゲート失敗があれば不合格。
+  const sc = scorecard({
+    gate: { failed: ["gFail"], total: 2 },
+    total: { pass: 5, evaluated: 5, skipped: 0 },
+  });
+  expect(overallPassed(sc)).toBe(false);
+});
+
+test("overallPassed は評価済みに FAIL があれば（ゲート全 PASS でも）false", () => {
+  const sc = scorecard({
+    gate: { failed: [], total: 1 },
+    total: { pass: 4, evaluated: 5, skipped: 0 },
+  });
+  expect(overallPassed(sc)).toBe(false);
+});
+
+test("formatScorecard は軸別行・ゲート行・総合 PASS 数を含む", () => {
+  const sc = scorecard({
+    perAxis: [
+      { axis: "A", pass: 1, total: 2 },
+      { axis: "safety", pass: 1, total: 1 },
+    ],
+    gate: { failed: ["gFail"], total: 3 },
+    total: { pass: 5, evaluated: 7, skipped: 2 },
+  });
+  const out = formatScorecard(sc);
+  // 軸別行: 各軸名と pass/total。
+  expect(out.includes("A")).toBe(true);
+  expect(out.includes("1/2")).toBe(true);
+  expect(out.includes("safety")).toBe(true);
+  // ゲート行: 失敗件数と失敗ケース名。
+  expect(out.includes("gFail")).toBe(true);
+  // 総合行: 評価済み基準の PASS 数（既存の総合 PASS 数を保持）と SKIP 数。
+  expect(out.includes("5/7")).toBe(true);
+  expect(out.includes("2 SKIP")).toBe(true);
+});
+
+test("formatScorecard はゲート失敗なしのとき失敗なしと分かる総合行を出す", () => {
+  const sc = scorecard({
+    perAxis: [{ axis: "A", pass: 2, total: 2 }],
+    gate: { failed: [], total: 2 },
+    total: { pass: 3, evaluated: 3, skipped: 0 },
+  });
+  const out = formatScorecard(sc);
+  // 総合 PASS 数を保持。
+  expect(out.includes("3/3")).toBe(true);
+  // ゲート行が母数を示し、失敗ケース名は現れない。
+  expect(out.includes("gFail")).toBe(false);
 });
