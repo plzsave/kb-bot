@@ -143,6 +143,92 @@ export function validateCases(cases: RawCase[]): string[] {
   return errors;
 }
 
+/** ケース実行の結果ステータス。SKIP は合否・集計から除外される。 */
+export type CaseStatus = "PASS" | "FAIL" | "SKIP" | "ERROR";
+
+/** 1 ケースの評価結果。実行ループが各ケースにつき 1 件構築する。 */
+export interface CaseResult {
+  name: string;
+  axis?: Axis; // 省略時は無タグ（総合のみに数える）
+  gate: boolean; // ゲートケースか（省略時 false 相当）
+  status: CaseStatus;
+  fails: string[]; // FAIL の内訳（PASS/SKIP/ERROR は空でよい）
+}
+
+/** 1 評価軸の集計（pass/total は評価済み＝非 SKIP のみ）。 */
+export interface AxisTally {
+  axis: Axis;
+  pass: number;
+  total: number;
+}
+
+/** 結果列から一意に導かれる派生状態（永続化なし）。 */
+export interface Scorecard {
+  perAxis: AxisTally[]; // 出現した軸のみ・SKIP を除外して集計
+  gate: { failed: string[]; total: number }; // 評価済みゲートのうち FAIL/ERROR の名前と母数
+  total: { pass: number; evaluated: number; skipped: number };
+}
+
+/**
+ * 結果列からスコアカードを集計する純粋関数。
+ * - 評価済み（非 SKIP）のみを軸別 pass/total・ゲート・total.evaluated に数える（Req 5.2/5.3）。
+ * - 無タグ（axis 未指定）は軸別に含めず総合（evaluated/pass）のみに数える（Req 1.3）。
+ * - axis と gate は直交。両方を持つケースは軸別 tally とゲート母数の双方に計上する。
+ * - ゲートの失敗一覧は評価済みゲートのうち FAIL/ERROR のケース名（Req 2.1/2.3）。
+ * 副作用なし・入力不変（Invariant）。
+ */
+export function buildScorecard(results: CaseResult[]): Scorecard {
+  const axisOrder: Axis[] = [];
+  const tallyByAxis = new Map<Axis, AxisTally>();
+  const gateFailed: string[] = [];
+  let gateTotal = 0;
+  let pass = 0;
+  let evaluated = 0;
+  let skipped = 0;
+
+  for (const r of results) {
+    // SKIP は軸別・ゲート・evaluated のいずれにも数えない（Req 5.2/5.3）。
+    if (r.status === "SKIP") {
+      skipped++;
+      continue;
+    }
+
+    evaluated++;
+    const isPass = r.status === "PASS";
+    if (isPass) pass++;
+
+    // 軸別 tally（無タグは含めない、Req 1.3）。出現順を保ちつつ集計する。
+    if (r.axis !== undefined) {
+      let tally = tallyByAxis.get(r.axis);
+      if (tally === undefined) {
+        tally = { axis: r.axis, pass: 0, total: 0 };
+        tallyByAxis.set(r.axis, tally);
+        axisOrder.push(r.axis);
+      }
+      tally.total++;
+      if (isPass) tally.pass++;
+    }
+
+    // ゲート母数（axis と直交）。FAIL/ERROR は失敗一覧へ（Req 2.1/2.3）。
+    if (r.gate) {
+      gateTotal++;
+      if (r.status === "FAIL" || r.status === "ERROR") gateFailed.push(r.name);
+    }
+  }
+
+  const perAxis = axisOrder.map((axis) => {
+    const tally = tallyByAxis.get(axis);
+    // axisOrder に積んだ軸は必ず存在するが、noUncheckedIndexedAccess 下で安全に扱う。
+    return tally ?? { axis, pass: 0, total: 0 };
+  });
+
+  return {
+    perAxis,
+    gate: { failed: gateFailed, total: gateTotal },
+    total: { pass, evaluated, skipped },
+  };
+}
+
 // --- main ---
 // 実 LLM/GitHub に触れる副作用はすべてこの main() 内に閉じ、直接実行時のみ走らせる。
 // これにより test 等が本モジュールを import しても LLM/GitHub 呼び出しは発生しない。
