@@ -61,4 +61,4 @@
 ## Implementation Notes
 - 純粋関数（`validateCases`/`buildScorecard`/`overallPassed`/`formatScorecard`）と型（`Axis`/`AXES`/`RawCase`/`Case`/`CaseStatus`/`CaseResult`/`AxisTally`/`Scorecard`）は `scripts/kb-eval.ts` で `export` 済み。3.1 の main 結線・4.1 のテストはこれらを再利用し再定義しないこと。
 - 2.3 で確定した `formatScorecard` の出力ラベル（`=== スコアカード ===` / `軸 X: p/t PASS` / `ゲート: FAIL n 件（…）` / `総合 p/e PASS, s SKIP`）は design の Revalidation Triggers 対象。3.1 はこのフォーマットをそのまま末尾出力に使い、勝手に変えないこと。逐次行のゲート区別は別途 `FAIL*`（gate 印）で行う。
-- 4.2: 既存 7 ケースの**実 LLM 回帰**（GitHub 未設定で 5 PASS / 2 SKIP / exit 0）は API キー必須のため自動化環境では未実行（MANUAL_VERIFY）。手動確認コマンド: `unset KB_GITHUB_REPOS && bun run scripts/kb-eval.ts`。終了コード是正（SKIP のみ＋他 PASS→exit 0）自体は `overallPassed` 単体テストで裏取り済み。
+- 4.2: 既存 7 ケースの**実 LLM 回帰**を 2026-06-30 に手動実機で確認済み（provider=anthropic / model=claude-haiku-4-5）。2 経路とも合格: (a) GitHub 設定下で 7/7 PASS・exit 0、(b) GitHub 無効化で 5 PASS / 2 SKIP・exit 0（核心の「SKIP のみ＋他 PASS→exit 0」を実機で裏取り。`overallPassed` 単体テストでも担保済み）。GitHub の無効化は bun が `.env` を優先するため `unset`/`env -u` では効かず、**空で上書き**する: `KB_GITHUB_REPOS= bun run scripts/kb-eval.ts`。
