@@ -36,10 +36,26 @@ interface Expect {
   answerOmits?: string[];
 }
 
+/** 評価軸の許容集合。スコアカードはこの軸ごとに到達度を集計する。 */
+type Axis = "A" | "B" | "C" | "D" | "safety";
+const AXES = ["A", "B", "C", "D", "safety"] as const;
+
+/** JSON 直後の緩い形状。axis/gate は未検証なので Axis に narrow しない（検証は後続タスク）。 */
+export interface RawCase {
+  name: string;
+  question: string;
+  expect: Expect;
+  axis?: string; // 未検証。validateCases 通過後に Axis へ narrow
+  gate?: unknown; // 未検証。boolean 以外は不正
+}
+
+/** 検証済みケース。axis は有効な Axis、gate は boolean に確定。 */
 interface Case {
   name: string;
   question: string;
   expect: Expect;
+  axis?: Axis; // 省略時は無タグ（総合のみに数える）
+  gate?: boolean; // 省略時は false
 }
 
 interface Call {
@@ -107,74 +123,256 @@ function evalCase(expect: Expect, calls: Call[], answer: string): string[] {
   return fails;
 }
 
-// --- main ---
-const casesPath = process.argv[2] ?? "./eval/cases.json";
-let cases: Case[];
-try {
-  cases = JSON.parse(readFileSync(casesPath, "utf8")) as Case[];
-} catch (e) {
-  console.error(`ケース読込に失敗: ${casesPath} (${(e as Error).message})`);
-  console.error("例は eval/cases.sample.json を参照してください。");
-  process.exit(1);
-}
-
-const { provider, model } = createLlm();
-const db = openDb(dbPath());
-const github = loadGitHub();
-console.log(
-  `eval: provider=${provider.name} model=${model} github=${github ? github.repos.join(",") : "off"} / ${cases.length} ケース\n`,
-);
-
-let passed = 0;
-const startedAt = Date.now();
-
-for (const c of cases) {
-  // GitHub ツールを期待するケースは GitHub 未設定ならスキップ（誤った FAIL を避ける）。
-  const needsGh =
-    c.expect.source === "code" ||
-    c.expect.source === "both" ||
-    (c.expect.toolsUsedAny ?? []).some((t) => GH_TOOLS.has(t)) ||
-    (c.expect.toolsUsedAll ?? []).some((t) => GH_TOOLS.has(t)) ||
-    !!c.expect.readPathIncludes;
-  if (needsGh && !github) {
-    console.log(`SKIP  ${c.name} … GitHub 未設定（KB_GITHUB_REPOS）`);
-    continue;
-  }
-
-  const calls: Call[] = [];
-  const tools: AgentTool[] = [
-    recordTool(searchKnowledgeTool(db), calls),
-    ...(github ? githubTools(github).map((t) => recordTool(t, calls)) : []),
-  ];
-
-  // 本番と同じ初期コンテキスト（FTS 上位）＋system を組み立てる。
-  const hits = search(db, c.question, TOP_K);
-  const initialPrompt = `# 初期コンテキスト（FTS検索の上位${hits.length}件）\n\n${formatHits(hits)}\n\n# 質問\n${c.question}`;
-  const messages: LlmMessage[] = [{ role: "user", content: initialPrompt }];
-
-  try {
-    const result = await runAgent({
-      provider,
-      model,
-      system: buildSystem(github),
-      messages,
-      tools,
-      maxTurns: github ? 8 : 5,
-    });
-    const fails = evalCase(c.expect, calls, result.text);
-    const trace = calls.map((c) => c.name).join(" → ") || "（ツール未使用）";
-    if (fails.length === 0) {
-      passed++;
-      console.log(`PASS  ${c.name}  [${trace}]`);
-    } else {
-      console.log(`FAIL  ${c.name}  [${trace}]`);
-      for (const f of fails) console.log(`        - ${f}`);
+/**
+ * 読込直後の生ケース列を検証し、不正な評価軸／ゲート指定のエラー文（日本語）を配列で返す。
+ * 副作用なし・入力不変。戻り値が空配列なら呼び出し側は安全に Case[] へ narrow できる。
+ * 検証を AXES への narrow より前に置くことで、不正値が黙って集計へ流れ込むのを防ぐ（Req 1.4）。
+ */
+export function validateCases(cases: RawCase[]): string[] {
+  const errors: string[] = [];
+  for (const c of cases) {
+    // axis は省略可。指定された場合のみ許容集合への所属を検査する。
+    if (c.axis !== undefined && !(AXES as readonly string[]).includes(c.axis)) {
+      errors.push(`ケース "${c.name}": 不正な評価軸 "${c.axis}"（許容: ${AXES.join("|")}）`);
     }
-  } catch (e) {
-    console.log(`ERROR ${c.name}: ${(e as Error).message}`);
+    // gate は省略時 false 扱い。指定された場合は真偽値であること（防御的・最小）。
+    if (c.gate !== undefined && typeof c.gate !== "boolean") {
+      errors.push(`ケース "${c.name}": gate は真偽値である必要があります（受領: ${JSON.stringify(c.gate)}）`);
+    }
   }
+  return errors;
 }
 
-const secs = ((Date.now() - startedAt) / 1000).toFixed(1);
-console.log(`\n=== ${passed}/${cases.length} PASS (${secs}s) ===`);
-process.exit(passed === cases.length ? 0 : 1);
+/** ケース実行の結果ステータス。SKIP は合否・集計から除外される。 */
+export type CaseStatus = "PASS" | "FAIL" | "SKIP" | "ERROR";
+
+/** 1 ケースの評価結果。実行ループが各ケースにつき 1 件構築する。 */
+export interface CaseResult {
+  name: string;
+  axis?: Axis; // 省略時は無タグ（総合のみに数える）
+  gate: boolean; // ゲートケースか（省略時 false 相当）
+  status: CaseStatus;
+  fails: string[]; // FAIL の内訳（PASS/SKIP/ERROR は空でよい）
+}
+
+/** 1 評価軸の集計（pass/total は評価済み＝非 SKIP のみ）。 */
+export interface AxisTally {
+  axis: Axis;
+  pass: number;
+  total: number;
+}
+
+/** 結果列から一意に導かれる派生状態（永続化なし）。 */
+export interface Scorecard {
+  perAxis: AxisTally[]; // 出現した軸のみ・SKIP を除外して集計
+  gate: { failed: string[]; total: number }; // 評価済みゲートのうち FAIL/ERROR の名前と母数
+  total: { pass: number; evaluated: number; skipped: number };
+}
+
+/**
+ * 結果列からスコアカードを集計する純粋関数。
+ * - 評価済み（非 SKIP）のみを軸別 pass/total・ゲート・total.evaluated に数える（Req 5.2/5.3）。
+ * - 無タグ（axis 未指定）は軸別に含めず総合（evaluated/pass）のみに数える（Req 1.3）。
+ * - axis と gate は直交。両方を持つケースは軸別 tally とゲート母数の双方に計上する。
+ * - ゲートの失敗一覧は評価済みゲートのうち FAIL/ERROR のケース名（Req 2.1/2.3）。
+ * 副作用なし・入力不変（Invariant）。
+ */
+export function buildScorecard(results: CaseResult[]): Scorecard {
+  const axisOrder: Axis[] = [];
+  const tallyByAxis = new Map<Axis, AxisTally>();
+  const gateFailed: string[] = [];
+  let gateTotal = 0;
+  let pass = 0;
+  let evaluated = 0;
+  let skipped = 0;
+
+  for (const r of results) {
+    // SKIP は軸別・ゲート・evaluated のいずれにも数えない（Req 5.2/5.3）。
+    if (r.status === "SKIP") {
+      skipped++;
+      continue;
+    }
+
+    evaluated++;
+    const isPass = r.status === "PASS";
+    if (isPass) pass++;
+
+    // 軸別 tally（無タグは含めない、Req 1.3）。出現順を保ちつつ集計する。
+    if (r.axis !== undefined) {
+      let tally = tallyByAxis.get(r.axis);
+      if (tally === undefined) {
+        tally = { axis: r.axis, pass: 0, total: 0 };
+        tallyByAxis.set(r.axis, tally);
+        axisOrder.push(r.axis);
+      }
+      tally.total++;
+      if (isPass) tally.pass++;
+    }
+
+    // ゲート母数（axis と直交）。FAIL/ERROR は失敗一覧へ（Req 2.1/2.3）。
+    if (r.gate) {
+      gateTotal++;
+      if (r.status === "FAIL" || r.status === "ERROR") gateFailed.push(r.name);
+    }
+  }
+
+  const perAxis = axisOrder.map((axis) => {
+    const tally = tallyByAxis.get(axis);
+    // axisOrder に積んだ軸は必ず存在するが、noUncheckedIndexedAccess 下で安全に扱う。
+    return tally ?? { axis, pass: 0, total: 0 };
+  });
+
+  return {
+    perAxis,
+    gate: { failed: gateFailed, total: gateTotal },
+    total: { pass, evaluated, skipped },
+  };
+}
+
+/**
+ * 全体合否を導く純粋判定。true=合格。
+ * - 評価済み（非 SKIP）が全 PASS（`total.pass === total.evaluated`）かつ
+ * - ゲート失敗なし（`gate.failed.length === 0`）のとき合格（Req 2.2/2.4）。
+ * ゲート失敗があればスコア軸の結果に関わらず不合格（ハード合否、Req 2.2）。
+ * 全ゲート PASS のときはスコア軸の結果（評価済み全 PASS か）のみで決まる（Req 2.4）。
+ * SKIP は `evaluated` に数えないため合否を歪めない（Req 5.2/5.3）。副作用なし。
+ */
+export function overallPassed(sc: Scorecard): boolean {
+  return sc.total.pass === sc.total.evaluated && sc.gate.failed.length === 0;
+}
+
+/**
+ * スコアカードを末尾表示用の文字列に整形する純粋関数。
+ * 軸別行（各 perAxis の pass/total）＋ゲート行（失敗の有無/件数・失敗ケース名）＋
+ * 総合行（評価済み基準で総合 PASS 数と SKIP 数を明示）を含む（Req 3.1/3.2/3.3）。
+ * 総合行は既存の総合 PASS 数（`sc.total.pass`）を保持する（Req 3.3）。副作用なし。
+ */
+export function formatScorecard(sc: Scorecard): string {
+  const lines: string[] = ["=== スコアカード ==="];
+
+  // 軸別行: 出現した軸のみ（無タグは含めない）。
+  if (sc.perAxis.length > 0) {
+    for (const t of sc.perAxis) {
+      lines.push(`  軸 ${t.axis}: ${t.pass}/${t.total} PASS`);
+    }
+  } else {
+    lines.push("  軸: （タグ付けケースなし）");
+  }
+
+  // ゲート行: スコア軸の FAIL と区別できる形で、失敗の有無/件数・失敗ケース名を示す。
+  if (sc.gate.total === 0) {
+    lines.push("  ゲート: なし");
+  } else if (sc.gate.failed.length === 0) {
+    lines.push(`  ゲート: 全 PASS（母数 ${sc.gate.total}）`);
+  } else {
+    lines.push(`  ゲート: FAIL ${sc.gate.failed.length} 件（${sc.gate.failed.join(", ")}）/ 母数 ${sc.gate.total}`);
+  }
+
+  // 総合行: 評価済み基準で明示（例 `総合 5/5 PASS, 2 SKIP`）。既存の総合 PASS 数を保持。
+  lines.push(`  総合 ${sc.total.pass}/${sc.total.evaluated} PASS, ${sc.total.skipped} SKIP`);
+
+  return lines.join("\n");
+}
+
+/**
+ * 逐次行の先頭ラベルを返す純粋関数。ゲートケースの失敗（FAIL/ERROR）には印（`*`）を付け、
+ * スコア軸の FAIL とひと目で区別できるようにする（Req 2.3）。PASS/SKIP は失敗ではないため印を付けない。
+ * 副作用なし・入力不変。
+ */
+export function statusLabel(status: CaseStatus, gate: boolean): string {
+  if (gate && (status === "FAIL" || status === "ERROR")) return `${status}*`;
+  return status;
+}
+
+// --- main ---
+// 実 LLM/GitHub に触れる副作用はすべてこの main() 内に閉じ、直接実行時のみ走らせる。
+// これにより test 等が本モジュールを import しても LLM/GitHub 呼び出しは発生しない。
+async function main() {
+  const casesPath = process.argv[2] ?? "./eval/cases.json";
+  let raw: RawCase[];
+  try {
+    raw = JSON.parse(readFileSync(casesPath, "utf8")) as RawCase[];
+  } catch (e) {
+    console.error(`ケース読込に失敗: ${casesPath} (${(e as Error).message})`);
+    console.error("例は eval/cases.sample.json を参照してください。");
+    process.exit(1);
+  }
+
+  // 集計へ流す前に軸/ゲートを検証する。不正があれば内容を出力して非ゼロ終了（黙って集計しない、Req 1.4）。
+  const validationErrors = validateCases(raw);
+  if (validationErrors.length > 0) {
+    console.error("ケース定義に不正があります:");
+    for (const err of validationErrors) console.error(`  - ${err}`);
+    process.exit(1);
+  }
+  // 検証成功後に Case[] へ narrow（validateCases 通過＝axis は有効値・gate は真偽値）。
+  const cases = raw as Case[];
+
+  const { provider, model } = createLlm();
+  const db = openDb(dbPath());
+  const github = loadGitHub();
+  console.log(
+    `eval: provider=${provider.name} model=${model} github=${github ? github.repos.join(",") : "off"} / ${cases.length} ケース\n`,
+  );
+
+  const results: CaseResult[] = [];
+  const startedAt = Date.now();
+
+  for (const c of cases) {
+    const gate = c.gate ?? false;
+    // GitHub ツールを期待するケースは GitHub 未設定ならスキップ（誤った FAIL を避ける）。
+    const needsGh =
+      c.expect.source === "code" ||
+      c.expect.source === "both" ||
+      (c.expect.toolsUsedAny ?? []).some((t) => GH_TOOLS.has(t)) ||
+      (c.expect.toolsUsedAll ?? []).some((t) => GH_TOOLS.has(t)) ||
+      !!c.expect.readPathIncludes;
+    if (needsGh && !github) {
+      console.log(`${statusLabel("SKIP", gate)}  ${c.name} … GitHub 未設定（KB_GITHUB_REPOS）`);
+      results.push({ name: c.name, axis: c.axis, gate, status: "SKIP", fails: [] });
+      continue;
+    }
+
+    const calls: Call[] = [];
+    const tools: AgentTool[] = [
+      recordTool(searchKnowledgeTool(db), calls),
+      ...(github ? githubTools(github).map((t) => recordTool(t, calls)) : []),
+    ];
+
+    // 本番と同じ初期コンテキスト（FTS 上位）＋system を組み立てる。
+    const hits = search(db, c.question, TOP_K);
+    const initialPrompt = `# 初期コンテキスト（FTS検索の上位${hits.length}件）\n\n${formatHits(hits)}\n\n# 質問\n${c.question}`;
+    const messages: LlmMessage[] = [{ role: "user", content: initialPrompt }];
+
+    try {
+      const result = await runAgent({
+        provider,
+        model,
+        system: buildSystem(github),
+        messages,
+        tools,
+        maxTurns: github ? 8 : 5,
+      });
+      const fails = evalCase(c.expect, calls, result.text);
+      const trace = calls.map((c) => c.name).join(" → ") || "（ツール未使用）";
+      const status: CaseStatus = fails.length === 0 ? "PASS" : "FAIL";
+      console.log(`${statusLabel(status, gate)}  ${c.name}  [${trace}]`);
+      for (const f of fails) console.log(`        - ${f}`);
+      results.push({ name: c.name, axis: c.axis, gate, status, fails });
+    } catch (e) {
+      const message = (e as Error).message;
+      console.log(`${statusLabel("ERROR", gate)} ${c.name}: ${message}`);
+      results.push({ name: c.name, axis: c.axis, gate, status: "ERROR", fails: [message] });
+    }
+  }
+
+  const sc = buildScorecard(results);
+  const secs = ((Date.now() - startedAt) / 1000).toFixed(1);
+  // 末尾にスコアカードを追加表示（評価済み基準の総合行を含む、Req 3.1/3.3）。
+  console.log(`\n${formatScorecard(sc)}`);
+  console.log(`（所要 ${secs}s）`);
+  // 終了コードは評価済み全 PASS かつゲート失敗なしのみ 0（SKIP を分母に含めない、Req 2.2/2.4/5.2）。
+  process.exit(overallPassed(sc) ? 0 : 1);
+}
+
+if (import.meta.main) await main();
