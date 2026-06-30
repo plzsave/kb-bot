@@ -129,6 +129,9 @@ Use the Write tool to create `.kiro/specs/<feature-name>/brief.md` with this str
 ```
 # Brief: <feature-name>
 
+## Source
+[originating GitHub issue or request link, if any — e.g. `GitHub issue #28`; omit the line if none. When set, the completing PR links it via `Closes #<n>` (see CLAUDE.md "Issue-Sourced Work Linkage").]
+
 ## Problem
 [who has the problem, what pain it causes]
 

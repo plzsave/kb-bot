@@ -55,6 +55,13 @@ Skills are located in `.claude/skills/kiro-*/SKILL.md`
 - Keep steering current and verify alignment with `/kiro-spec-status`
 - Follow the user's instructions precisely, and within that scope act autonomously: gather the necessary context and complete the requested work end-to-end in this run, asking questions only when essential information is missing or the instructions are critically ambiguous.
 
+## Issue-Sourced Work Linkage
+When work originates from a GitHub issue (e.g., started via `/kiro-discovery-issue <n>`), close the loop on that issue automatically as part of finishing — do not leave it to the user to ask.
+- **Record the source**: The originating issue number is captured in the spec's `brief.md` under `## Source` (e.g., `GitHub issue #28`). Treat that as the link target for the rest of the workflow. For no-spec paths (discovery Path A/B), carry the issue number forward explicitly in the next-step suggestion.
+- **Link via the PR**: The PR that completes the work MUST include a closing keyword in its body (`Closes #<n>`). On merge, GitHub then auto-closes the issue and shows it as linked in the Development panel — no manual step needed.
+- **If a merge slipped through without it**: add `Closes #<n>` to the (already-merged) PR body to establish the linkage, then close the issue manually with a brief completion comment (`gh issue close <n> --reason completed --comment ...`). Match the repo's PR/commit writing conventions (Japanese, concise, scope-explicit; reference the PR and merge commit).
+- **Partial scope**: If the issue is only partially addressed (follow-on issues remain), do NOT auto-close; comment what was delivered and which issues continue the work, and leave it open.
+
 ## Steering Configuration
 - Load entire `.kiro/steering/` as project memory
 - Default files: `product.md`, `tech.md`, `structure.md`
