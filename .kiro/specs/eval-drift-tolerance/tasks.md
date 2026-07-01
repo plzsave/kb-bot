@@ -50,7 +50,7 @@
   - _Depends: 1.1, 1.2, 2.1_
   - _Boundary: buildFixtureDb, Case schema extension_
 
-- [ ] 4.2 回帰・SKIP・型チェックの最終確認
+- [x] 4.2 回帰・SKIP・型チェックの最終確認
   - 型チェックが通ること、既存ケースが無改修で採点対象のまま維持されること、本番コードを一切変更していないことを確認する
   - GitHub 未設定でドリフトケースが SKIP され、合否・軸別集計・合否ゲートの母数から除外される（誤 FAIL を出さない）ことを確認する
   - 観測可能な完了条件: `bun run typecheck` がクリーンで、GitHub 未設定実行時にドリフトケースが SKIP 表示され集計に数えられず、変更差分が eval とテストの範囲に閉じている
@@ -60,3 +60,5 @@
 ## Implementation Notes
 - 4.1 のユニットテストは 1.1/1.2 の TDD で先行して作成済み・独立レビュー承認済み。`test/kb-eval.test.ts` に対応: buildFixtureDb は retrievable(2.1/2.4)・複数索引・相互隔離(2.2)・baseDir 固定/cwd 非依存(Issue2)・fail-fast、validateCases は fixtures 配列許容・未指定通過(後方互換)・非配列/非文字列拒否。`bun test test/kb-eval.test.ts` 43 pass/0 fail。追加コード不要のため新規実装は無し。
 - フィクスチャ参照の解決規約（Issue 2 対応）: cases.json は素のファイル名（例 `["cache-ttl.md"]`）を持ち、ループが `baseDir = join(dirname(casesPath), "fixtures")` を渡す。buildFixtureDb は `join(baseDir, name)` で解決＝`eval/fixtures/cache-ttl.md`。cwd 非依存。
+- 4.2 検証エビデンス（決定論的）: `bun run typecheck` クリーン、`bun test` 151 pass/0 fail、差分は `eval/cases.json`・`eval/fixtures/cache-ttl.md`・`scripts/kb-eval.ts`・`test/kb-eval.test.ts` のみで `src/` 無改変(5.1/5.2/5.3)。drift ケースは needsGh=true ＝ GitHub 未設定で SKIP＝誤 FAIL なし(3.1)。buildScorecard に SKIP を与えると total.evaluated と軸別 tally から除外され skipped のみに計上(3.2)。
+- 残る手動検証: 実際の drift PASS/FAIL は `bun run kb:eval`（実 LLM＋実 GitHub、課金あり）が必要で本 CI 環境では未実施。GitHub 有効時に「コードを読んで 24h を cache.ts の path:line で答えれば PASS／古い doc の無期限を鵜呑みにすれば FAIL」を運用者が確認すること。
