@@ -76,5 +76,18 @@
       "citesSource": true
     },
     "axis": "B"
+  },
+  {
+    "name": "B′ drift: 回答キャッシュの TTL は古い doc とコードが矛盾（コード優先）",
+    "question": "回答キャッシュの有効期限（TTL）は既定でどうなっていますか？実装ファイルを path:line 形式で引用して、既定の挙動の根拠を示してください。",
+    "expect": {
+      "source": "code",
+      "toolsUsedAny": ["read_repo_file", "search_repo_code"],
+      "answerIncludes": ["24"],
+      "readPathIncludes": "cache.ts",
+      "citesSource": true
+    },
+    "axis": "B",
+    "fixtures": ["cache-ttl.md"]
   }
 ]

@@ -6,10 +6,13 @@
 // 各ケースで本番と同じ前処理（FTS 前置き＋buildSystem＋ツール群）を組み立て、ツールを
 // ラップして「どのツールを・どんな引数で呼んだか」を記録し、expect と突き合わせて採点する。
 // 期待は「指定された項目だけ」検査する（未指定は不問）。全項目 PASS でケース合格。
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import type { Database } from "bun:sqlite";
 import { createLlm } from "../src/llm/factory.ts";
 import { dbPath } from "../src/config.ts";
-import { openDb, search } from "../src/kb/db.ts";
+import { openDb, replaceDoc, search } from "../src/kb/db.ts";
+import { chunkMarkdown } from "../src/kb/chunk.ts";
 import { loadGitHub } from "../src/github.ts";
 import { runAgent, type AgentTool } from "../src/agent/agent.ts";
 import { searchKnowledgeTool, formatHits } from "../src/agent/tools.ts";
@@ -85,6 +88,7 @@ export interface RawCase {
   expect: Expect;
   axis?: string; // 未検証。validateCases 通過後に Axis へ narrow
   gate?: unknown; // 未検証。boolean 以外は不正
+  fixtures?: unknown; // 未検証。文字列配列以外は不正（隔離索引に載せる eval 専用 doc 名）
 }
 
 /** 検証済みケース。axis は有効な Axis、gate は boolean に確定。 */
@@ -94,6 +98,7 @@ interface Case {
   expect: Expect;
   axis?: Axis; // 省略時は無タグ（総合のみに数える）
   gate?: boolean; // 省略時は false
+  fixtures?: string[]; // 省略時は本番 db を使用（従来挙動）。非空なら隔離索引に切り替える（buildFixtureDb が消費）
 }
 
 interface Call {
@@ -179,6 +184,13 @@ export function validateCases(cases: RawCase[]): string[] {
     // gate は省略時 false 扱い。指定された場合は真偽値であること（防御的・最小）。
     if (c.gate !== undefined && typeof c.gate !== "boolean") {
       errors.push(`ケース "${c.name}": gate は真偽値である必要があります（受領: ${JSON.stringify(c.gate)}）`);
+    }
+    // fixtures は省略可。指定された場合は「文字列の配列」であること（防御的・最小、実在検査は実行ループ側）。
+    if (
+      c.fixtures !== undefined &&
+      !(Array.isArray(c.fixtures) && c.fixtures.every((f) => typeof f === "string"))
+    ) {
+      errors.push(`ケース "${c.name}": fixtures は文字列の配列である必要があります（受領: ${JSON.stringify(c.fixtures)}）`);
     }
   }
   return errors;
@@ -325,6 +337,29 @@ export function statusLabel(status: CaseStatus, gate: boolean): string {
   return status;
 }
 
+/**
+ * フィクスチャ Markdown 群を本番 KB と分離した in-memory FTS 索引に組み立てて返す（Req 2.1/2.2/2.4）。
+ * - `openDb(":memory:")` で空の隔離索引を作る。本番 `dbPath()`/`./kb.sqlite` は一切開かず・変更しない（2.2）。
+ * - 各 `fixturePath` は `join(baseDir, fixturePath)` で解決する。基準は呼び出し側が渡す `baseDir`（＝ケース
+ *   定義ファイルのディレクトリ）に固定し、実行時の `process.cwd()` に依存しない（設計レビュー Issue 2）。
+ * - 解決先が存在しなければ原因パスを添えて即エラー（fail-fast, Error Handling）。
+ * - 索引は既存部品（`chunkMarkdown` → `replaceDoc`）を再利用。`docKey` はフィクスチャの相対パス。
+ * - 返す db は呼び出し側が `close()` する（ここでは閉じない）。副作用は baseDir 配下の読み取りと in-memory 構築のみ。
+ */
+export function buildFixtureDb(fixturePaths: string[], baseDir: string): Database {
+  const db = openDb(":memory:");
+  for (const fixturePath of fixturePaths) {
+    const resolved = join(baseDir, fixturePath);
+    if (!existsSync(resolved)) {
+      db.close();
+      throw new Error(`フィクスチャが見つかりません: ${resolved}`);
+    }
+    const md = readFileSync(resolved, "utf8");
+    replaceDoc(db, fixturePath, chunkMarkdown(md));
+  }
+  return db;
+}
+
 // --- main ---
 // 実 LLM/GitHub に触れる副作用はすべてこの main() 内に閉じ、直接実行時のみ走らせる。
 // これにより test 等が本モジュールを import しても LLM/GitHub 呼び出しは発生しない。
@@ -356,6 +391,9 @@ async function main() {
     `eval: provider=${provider.name} model=${model} github=${github ? github.repos.join(",") : "off"} / ${cases.length} ケース\n`,
   );
 
+  // フィクスチャの基準ディレクトリはケース定義ファイルの位置に固定する（cwd 非依存, Req 2.3）。
+  const fixturesBaseDir = join(dirname(casesPath), "fixtures");
+
   const results: CaseResult[] = [];
   const startedAt = Date.now();
 
@@ -374,36 +412,45 @@ async function main() {
       continue;
     }
 
-    const calls: Call[] = [];
-    const tools: AgentTool[] = [
-      recordTool(searchKnowledgeTool(db), calls),
-      ...(github ? githubTools(github).map((t) => recordTool(t, calls)) : []),
-    ];
-
-    // 本番と同じ初期コンテキスト（FTS 上位）＋system を組み立てる。
-    const hits = search(db, c.question, TOP_K);
-    const initialPrompt = `# 初期コンテキスト（FTS検索の上位${hits.length}件）\n\n${formatHits(hits)}\n\n# 質問\n${c.question}`;
-    const messages: LlmMessage[] = [{ role: "user", content: initialPrompt }];
+    // SKIP 判定後にこのケースの検索源 db を選ぶ。fixtures ありは隔離 in-memory 索引、無しは本番共有 db（Req 2.1/5.1）。
+    // 隔離索引の構築は SKIP 判定の後に置く（無駄な構築を避ける, Req 3.1）。
+    const caseDb = c.fixtures && c.fixtures.length > 0 ? buildFixtureDb(c.fixtures, fixturesBaseDir) : db;
 
     try {
-      const result = await runAgent({
-        provider,
-        model,
-        system: buildSystem(github),
-        messages,
-        tools,
-        maxTurns: github ? 8 : 5,
-      });
-      const fails = evalCase(c.expect, calls, result.text);
-      const trace = calls.map((c) => c.name).join(" → ") || "（ツール未使用）";
-      const status: CaseStatus = fails.length === 0 ? "PASS" : "FAIL";
-      console.log(`${statusLabel(status, gate)}  ${c.name}  [${trace}]`);
-      for (const f of fails) console.log(`        - ${f}`);
-      results.push({ name: c.name, axis: c.axis, gate, status, fails });
-    } catch (e) {
-      const message = (e as Error).message;
-      console.log(`${statusLabel("ERROR", gate)} ${c.name}: ${message}`);
-      results.push({ name: c.name, axis: c.axis, gate, status: "ERROR", fails: [message] });
+      const calls: Call[] = [];
+      const tools: AgentTool[] = [
+        recordTool(searchKnowledgeTool(caseDb), calls),
+        ...(github ? githubTools(github).map((t) => recordTool(t, calls)) : []),
+      ];
+
+      // 本番と同じ初期コンテキスト（FTS 上位）＋system を組み立てる。fixtures ありなら stale doc が前置きされる。
+      const hits = search(caseDb, c.question, TOP_K);
+      const initialPrompt = `# 初期コンテキスト（FTS検索の上位${hits.length}件）\n\n${formatHits(hits)}\n\n# 質問\n${c.question}`;
+      const messages: LlmMessage[] = [{ role: "user", content: initialPrompt }];
+
+      try {
+        const result = await runAgent({
+          provider,
+          model,
+          system: buildSystem(github),
+          messages,
+          tools,
+          maxTurns: github ? 8 : 5,
+        });
+        const fails = evalCase(c.expect, calls, result.text);
+        const trace = calls.map((c) => c.name).join(" → ") || "（ツール未使用）";
+        const status: CaseStatus = fails.length === 0 ? "PASS" : "FAIL";
+        console.log(`${statusLabel(status, gate)}  ${c.name}  [${trace}]`);
+        for (const f of fails) console.log(`        - ${f}`);
+        results.push({ name: c.name, axis: c.axis, gate, status, fails });
+      } catch (e) {
+        const message = (e as Error).message;
+        console.log(`${statusLabel("ERROR", gate)} ${c.name}: ${message}`);
+        results.push({ name: c.name, axis: c.axis, gate, status: "ERROR", fails: [message] });
+      }
+    } finally {
+      // 隔離索引はケース終了時に確実に破棄する。本番共有 db は他ケースが使うため閉じない（Error Handling）。
+      if (caseDb !== db) caseDb.close();
     }
   }
 
