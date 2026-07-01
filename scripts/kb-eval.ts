@@ -6,10 +6,13 @@
 // 各ケースで本番と同じ前処理（FTS 前置き＋buildSystem＋ツール群）を組み立て、ツールを
 // ラップして「どのツールを・どんな引数で呼んだか」を記録し、expect と突き合わせて採点する。
 // 期待は「指定された項目だけ」検査する（未指定は不問）。全項目 PASS でケース合格。
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import type { Database } from "bun:sqlite";
 import { createLlm } from "../src/llm/factory.ts";
 import { dbPath } from "../src/config.ts";
-import { openDb, search } from "../src/kb/db.ts";
+import { openDb, replaceDoc, search } from "../src/kb/db.ts";
+import { chunkMarkdown } from "../src/kb/chunk.ts";
 import { loadGitHub } from "../src/github.ts";
 import { runAgent, type AgentTool } from "../src/agent/agent.ts";
 import { searchKnowledgeTool, formatHits } from "../src/agent/tools.ts";
@@ -332,6 +335,29 @@ export function formatScorecard(sc: Scorecard): string {
 export function statusLabel(status: CaseStatus, gate: boolean): string {
   if (gate && (status === "FAIL" || status === "ERROR")) return `${status}*`;
   return status;
+}
+
+/**
+ * フィクスチャ Markdown 群を本番 KB と分離した in-memory FTS 索引に組み立てて返す（Req 2.1/2.2/2.4）。
+ * - `openDb(":memory:")` で空の隔離索引を作る。本番 `dbPath()`/`./kb.sqlite` は一切開かず・変更しない（2.2）。
+ * - 各 `fixturePath` は `join(baseDir, fixturePath)` で解決する。基準は呼び出し側が渡す `baseDir`（＝ケース
+ *   定義ファイルのディレクトリ）に固定し、実行時の `process.cwd()` に依存しない（設計レビュー Issue 2）。
+ * - 解決先が存在しなければ原因パスを添えて即エラー（fail-fast, Error Handling）。
+ * - 索引は既存部品（`chunkMarkdown` → `replaceDoc`）を再利用。`docKey` はフィクスチャの相対パス。
+ * - 返す db は呼び出し側が `close()` する（ここでは閉じない）。副作用は baseDir 配下の読み取りと in-memory 構築のみ。
+ */
+export function buildFixtureDb(fixturePaths: string[], baseDir: string): Database {
+  const db = openDb(":memory:");
+  for (const fixturePath of fixturePaths) {
+    const resolved = join(baseDir, fixturePath);
+    if (!existsSync(resolved)) {
+      db.close();
+      throw new Error(`フィクスチャが見つかりません: ${resolved}`);
+    }
+    const md = readFileSync(resolved, "utf8");
+    replaceDoc(db, fixturePath, chunkMarkdown(md));
+  }
+  return db;
 }
 
 // --- main ---
