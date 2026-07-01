@@ -34,6 +34,44 @@ interface Expect {
   answerIncludes?: string[];
   /** 最終回答にこれらが含まれないこと（幻覚・誤誘導の検出）。 */
   answerOmits?: string[];
+  /** 出典必須（軸 B′）。true のとき回答本文に出典の体裁が付いているかを検査する。 */
+  citesSource?: boolean;
+}
+
+/**
+ * 出典体裁の検出規約（Boundary Commitment, research.md 確定値）。テストと共有できるよう export する。
+ * - doc 引用: `.md` を末尾に持つ資料名トークン（例 `auth.md`, `docs/auth.md`）。
+ * - code 引用: 拡張子付き path に続く行番号（例 `db.ts:42`, `src/kb/db.ts:120`）。
+ */
+export const DOC_CITATION = /[\w./-]+\.md\b/;
+export const CODE_CITATION = /[\w./-]+\.[A-Za-z0-9]+:\d+/;
+
+/**
+ * 出典体裁（.md 資料名 または path:line）の欠如を検出して日本語 fail 文の配列で返す純粋関数。
+ * readPathIncludes 併用時は汎用体裁ではなく「読んだ path を含む path:line 形式の引用が本文にあるか」を
+ * 厳格検査する（厳格判定は汎用体裁を内包する）。citesSource が偽/未指定なら空配列（既存判定を変えない, Req 4.2）。
+ * 副作用なし・入力不変。
+ */
+export function citationFails(expect: Expect, answer: string): string[] {
+  // 出典必須フラグが立っていなければ何も検査しない（Req 4.2: 既存判定を一切変えない）。
+  if (!expect.citesSource) return [];
+
+  // 併用（code B′）: 厳格判定。読んだ path を含む path:line 引用が 1 つ以上あることを要求（Req 2.1–2.3）。
+  if (expect.readPathIncludes !== undefined) {
+    const path = expect.readPathIncludes;
+    const codeCites = answer.match(new RegExp(CODE_CITATION.source, "g")) ?? [];
+    const cited = codeCites.some((c) => c.includes(path));
+    if (!cited) {
+      return [`出典必須: 読んだ path "${path}" が行番号付き（path:line）で回答本文に引用されていない`];
+    }
+    return [];
+  }
+
+  // 汎用体裁（Req 1.1–1.3）: doc 引用 or code 引用のいずれかが本文にあれば可。
+  if (!DOC_CITATION.test(answer) && !CODE_CITATION.test(answer)) {
+    return ["出典必須: 回答本文に出典の体裁（.md 資料名 または path:line 引用）が含まれていない"];
+  }
+  return [];
 }
 
 /** 評価軸の許容集合。スコアカードはこの軸ごとに到達度を集計する。 */
