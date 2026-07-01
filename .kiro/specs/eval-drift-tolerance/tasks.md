@@ -42,7 +42,7 @@
   - _Boundary: Loop db 分岐_
 
 - [ ] 4. 検証: ユニットテストと回帰・型チェック
-- [ ] 4.1 フィクスチャ索引とケース検証のユニットテストを追加する
+- [x] 4.1 フィクスチャ索引とケース検証のユニットテストを追加する
   - 資格情報不要のユニットテストで、索引ヘルパがフィクスチャを retrievable にすること・2 つの索引が相互隔離であること・存在しないフィクスチャで即エラーになることを検証する
   - ケース検証が、フィクスチャ参照ありを許容し・非配列や非文字列を拒否し・フィクスチャ未指定の既存ケースを通過させることを検証する
   - 観測可能な完了条件: 追加ユニットテストが `bun test` で緑になり、隔離・retrievable・fail-fast・後方互換の各性質を実証する
@@ -56,3 +56,7 @@
   - 観測可能な完了条件: `bun run typecheck` がクリーンで、GitHub 未設定実行時にドリフトケースが SKIP 表示され集計に数えられず、変更差分が eval とテストの範囲に閉じている
   - _Requirements: 3.1, 3.2, 5.1, 5.2, 5.3_
   - _Depends: 3.1_
+
+## Implementation Notes
+- 4.1 のユニットテストは 1.1/1.2 の TDD で先行して作成済み・独立レビュー承認済み。`test/kb-eval.test.ts` に対応: buildFixtureDb は retrievable(2.1/2.4)・複数索引・相互隔離(2.2)・baseDir 固定/cwd 非依存(Issue2)・fail-fast、validateCases は fixtures 配列許容・未指定通過(後方互換)・非配列/非文字列拒否。`bun test test/kb-eval.test.ts` 43 pass/0 fail。追加コード不要のため新規実装は無し。
+- フィクスチャ参照の解決規約（Issue 2 対応）: cases.json は素のファイル名（例 `["cache-ttl.md"]`）を持ち、ループが `baseDir = join(dirname(casesPath), "fixtures")` を渡す。buildFixtureDb は `join(baseDir, name)` で解決＝`eval/fixtures/cache-ttl.md`。cwd 非依存。
