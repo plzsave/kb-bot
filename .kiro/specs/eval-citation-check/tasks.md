@@ -48,3 +48,8 @@
   - _Depends: 1.2, 2.1, 3.1_
   - _Requirements: 3.3, 3.4, 4.1, 4.5_
   - _Boundary: eval harness integration_
+  - _Manual: 自動検証は完了（typecheck 0 エラー / 142 テスト PASS / cases.json は validateCases エラー0・B′ 2件を確認 / 既存 7 ケースは main とバイト同一）。ただし Req 4.1 のランタイム PASS と Req 3.3/3.4 の PASS·FAIL 実証は `bun run kb:eval`（ライブ LLM＋GitHub・課金・要 KB_GITHUB_REPOS）が必要なため手動検証必須（MANUAL_VERIFY_REQUIRED）。_
+
+## Implementation Notes
+- 出典判定は純粋関数 `citationFails` に分離し `bun test` で回帰検証（`buildScorecard` 等と同じ既存パターン）。ライブ eval（`bun run kb:eval`）は課金・要認証情報のため CI/autonomous では走らせず、静的検証（typecheck・unit・構造テスト・validateCases dry-run）で品質を担保する方針。
+- code B′ の `readPathIncludes:"db.ts"` は実在（`src/kb/db.ts:28` の `tokenize='unicode61'`）と整合。`citationFails` 厳格分岐（読んだ path を含む `path:line`）が要求する引用と一致。
