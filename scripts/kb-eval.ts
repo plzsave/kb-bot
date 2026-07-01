@@ -85,6 +85,7 @@ export interface RawCase {
   expect: Expect;
   axis?: string; // 未検証。validateCases 通過後に Axis へ narrow
   gate?: unknown; // 未検証。boolean 以外は不正
+  fixtures?: unknown; // 未検証。文字列配列以外は不正（隔離索引に載せる eval 専用 doc 名）
 }
 
 /** 検証済みケース。axis は有効な Axis、gate は boolean に確定。 */
@@ -94,6 +95,7 @@ interface Case {
   expect: Expect;
   axis?: Axis; // 省略時は無タグ（総合のみに数える）
   gate?: boolean; // 省略時は false
+  fixtures?: string[]; // 省略時は本番 db を使用（従来挙動）。非空なら隔離索引に切り替える（buildFixtureDb が消費）
 }
 
 interface Call {
@@ -179,6 +181,13 @@ export function validateCases(cases: RawCase[]): string[] {
     // gate は省略時 false 扱い。指定された場合は真偽値であること（防御的・最小）。
     if (c.gate !== undefined && typeof c.gate !== "boolean") {
       errors.push(`ケース "${c.name}": gate は真偽値である必要があります（受領: ${JSON.stringify(c.gate)}）`);
+    }
+    // fixtures は省略可。指定された場合は「文字列の配列」であること（防御的・最小、実在検査は実行ループ側）。
+    if (
+      c.fixtures !== undefined &&
+      !(Array.isArray(c.fixtures) && c.fixtures.every((f) => typeof f === "string"))
+    ) {
+      errors.push(`ケース "${c.name}": fixtures は文字列の配列である必要があります（受領: ${JSON.stringify(c.fixtures)}）`);
     }
   }
   return errors;

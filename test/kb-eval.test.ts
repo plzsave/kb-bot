@@ -81,6 +81,34 @@ test("validateCases は gate が真偽値以外なら不正として報告する
   expect(errors.some((e) => e.includes("bad"))).toBe(true);
 });
 
+test("validateCases は fixtures が文字列配列なら許容する（後方互換の拡張）", () => {
+  const cases: RawCase[] = [
+    rawCase({ name: "f1", fixtures: ["cache-ttl.md"] }),
+    rawCase({ name: "f2", fixtures: ["a.md", "b.md"] }),
+    rawCase({ name: "f3", fixtures: [] }), // 空配列も文字列配列（許容）
+  ];
+  expect(validateCases(cases)).toEqual([]);
+});
+
+test("validateCases は fixtures 未指定なら従来どおり通過する（後方互換）", () => {
+  const cases: RawCase[] = [rawCase({ name: "a" }), rawCase({ name: "b", axis: "A" })];
+  expect(validateCases(cases)).toEqual([]);
+});
+
+test("validateCases は fixtures が非配列なら不正として報告する", () => {
+  const cases: RawCase[] = [rawCase({ name: "bad", fixtures: "cache-ttl.md" as unknown as string[] })];
+  const errors = validateCases(cases);
+  expect(errors.length).toBeGreaterThan(0);
+  expect(errors.some((e) => e.includes("bad") && e.includes("fixtures"))).toBe(true);
+});
+
+test("validateCases は fixtures の要素が非文字列なら不正として報告する", () => {
+  const cases: RawCase[] = [rawCase({ name: "bad", fixtures: [1] as unknown as string[] })];
+  const errors = validateCases(cases);
+  expect(errors.length).toBeGreaterThan(0);
+  expect(errors.some((e) => e.includes("bad") && e.includes("fixtures"))).toBe(true);
+});
+
 test("eval/cases.sample.json は validateCases を通過する（軸/ゲートのサンプルが妥当）", () => {
   // サンプルに記す軸/ゲートの使用例が常に有効な値であることを保証する恒久ガード（Req 4.1 の境界外で、サンプルのみを検証）。
   const sample = JSON.parse(readFileSync(new URL("../eval/cases.sample.json", import.meta.url), "utf8")) as RawCase[];
