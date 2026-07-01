@@ -116,7 +116,7 @@ function recordTool(tool: AgentTool, calls: Call[]): AgentTool {
 
 const GH_TOOLS = new Set(["list_repo_tree", "read_repo_file", "search_repo_code"]);
 
-function evalCase(expect: Expect, calls: Call[], answer: string): string[] {
+export function evalCase(expect: Expect, calls: Call[], answer: string): string[] {
   const fails: string[] = [];
   const used = new Set(calls.map((c) => c.name));
 
@@ -157,6 +157,9 @@ function evalCase(expect: Expect, calls: Call[], answer: string): string[] {
   for (const s of expect.answerOmits ?? []) {
     if (answer.includes(s)) fails.push(`回答に含まれてはいけない "${s}" が出た`);
   }
+
+  // 出典体裁の採点を末尾に統合（citesSource 未指定なら空配列＝既存判定は不変, Req 1.1/4.3）。
+  fails.push(...citationFails(expect, answer));
 
   return fails;
 }

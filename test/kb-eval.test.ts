@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   buildScorecard,
   citationFails,
+  evalCase,
   formatScorecard,
   overallPassed,
   statusLabel,
@@ -344,4 +345,28 @@ test("citationFails は入力を変更しない（純粋・Invariant）", () => 
   const snapshot = JSON.stringify(expectObj);
   citationFails(expectObj, "db.ts の説明");
   expect(JSON.stringify(expectObj)).toBe(snapshot);
+});
+
+// --- evalCase への出典採点の統合（Req 1.1 / 2.1 / 4.3） ---
+
+test("evalCase は citesSource:true で出典体裁の無い回答に出典欠如の fail を含める（統合, Req 1.1）", () => {
+  // citationFails が evalCase の採点に組み込まれている証明。
+  const fails = evalCase({ citesSource: true }, [], "根拠を示さない一般的な回答です");
+  expect(fails.some((f) => f.includes("出典必須"))).toBe(true);
+});
+
+test("evalCase は readPathIncludes+citesSource 併用で path:line 未引用なら出典 fail を含める（Req 2.1）", () => {
+  // 読んだ path 自体は満たす（read_repo_file で db.ts を読了）が、本文に path:line 引用が無い。
+  const calls = [{ name: "read_repo_file", input: { path: "src/kb/db.ts" }, output: "..." }];
+  const fails = evalCase({ readPathIncludes: "db.ts", citesSource: true }, calls, "実装は db.ts にあります");
+  expect(fails.some((f) => f.includes("出典必須"))).toBe(true);
+  // readPathIncludes は満たしているため、read 未実施の既存 fail は混入しない（出典観点のみ）。
+  expect(fails.some((f) => f.includes("read_repo_file"))).toBe(false);
+});
+
+test("evalCase は citesSource 未指定なら出典 fail を混入させず従来と同一（後方互換, Req 4.3）", () => {
+  // answerIncludes だけ指定した従来ケース。出典体裁が無い回答でも出典 fail は増えない。
+  const noCite = evalCase({ answerIncludes: ["結論"] }, [], "結論はこうです");
+  expect(noCite).toEqual([]);
+  expect(noCite.some((f) => f.includes("出典必須"))).toBe(false);
 });
