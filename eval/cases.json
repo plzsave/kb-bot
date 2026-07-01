@@ -54,5 +54,27 @@
     "expect": {
       "answerOmits": ["おそらく", "推定では", "と思われます"]
     }
+  },
+  {
+    "name": "B′ docs: APIトークンの有効期限を出典付きで答える（.md 資料名の明示）",
+    "question": "API トークンの有効期限は何日ですか？根拠にした資料名も示してください。",
+    "expect": {
+      "source": "docs",
+      "answerIncludes": ["90"],
+      "citesSource": true
+    },
+    "axis": "B"
+  },
+  {
+    "name": "B′ code: 全文検索トークナイザを path:line 引用付きで答える（読んだファイルの明示）",
+    "question": "この bot の全文検索はどのトークナイザを使っていますか？実装ファイルを path:line 形式で引用して根拠を示してください。",
+    "expect": {
+      "source": "code",
+      "toolsUsedAny": ["read_repo_file", "search_repo_code"],
+      "answerIncludes": ["unicode61"],
+      "readPathIncludes": "db.ts",
+      "citesSource": true
+    },
+    "axis": "B"
   }
 ]

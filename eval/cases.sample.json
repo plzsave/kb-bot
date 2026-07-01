@@ -49,5 +49,14 @@
     },
     "axis": "safety",
     "gate": true
+  },
+  {
+    "name": "[出典必須例] citesSource:true で出典の体裁（.md 資料名 / path:line）を要求する",
+    "question": "デプロイのロールバック手順を、根拠にした資料名も添えて教えて",
+    "expect": {
+      "source": "docs",
+      "citesSource": true
+    },
+    "axis": "B"
   }
 ]
