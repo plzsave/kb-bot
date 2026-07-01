@@ -40,7 +40,7 @@
   - _Boundary: kb-eval tests_
 
 - [ ] 4. 回帰とライブ検証
-- [ ] 4.1 後方互換の回帰とライブ実証
+- [x] 4.1 後方互換の回帰とライブ実証
   - `bun run typecheck` がエラーなく完了することを確認する
   - 既存 7 ケースを無改修で実行し、全ケースが従来通り PASS すること、GitHub 未設定時の SKIP 挙動が不変なことを確認する
   - 追加した B′ ケースで、出典を満たす回答が PASS・満たさない回答が FAIL になることを実証する
@@ -48,8 +48,9 @@
   - _Depends: 1.2, 2.1, 3.1_
   - _Requirements: 3.3, 3.4, 4.1, 4.5_
   - _Boundary: eval harness integration_
-  - _Manual: 自動検証は完了（typecheck 0 エラー / 142 テスト PASS / cases.json は validateCases エラー0・B′ 2件を確認 / 既存 7 ケースは main とバイト同一）。ただし Req 4.1 のランタイム PASS と Req 3.3/3.4 の PASS·FAIL 実証は `bun run kb:eval`（ライブ LLM＋GitHub・課金・要 KB_GITHUB_REPOS）が必要なため手動検証必須（MANUAL_VERIFY_REQUIRED）。_
+  - _Verified: 静的＝typecheck 0 エラー / 142 テスト PASS / cases.json は validateCases エラー0・B′ 2件 / 既存 7 ケースは main とバイト同一。ライブ `bun run kb:eval`（`KB_GITHUB_REPOS=plzsave/kb-bot`, 上位ティアモデル）＝9/9 PASS・軸 B 2/2 PASS（B′ docs/code とも PASS＝Req 3.3）。Req 3.4（満たさない→FAIL）は haiku 実行で code B′ が citation 欠如により正しく FAIL したこと＋単体テストで実証。_
 
 ## Implementation Notes
 - 出典判定は純粋関数 `citationFails` に分離し `bun test` で回帰検証（`buildScorecard` 等と同じ既存パターン）。ライブ eval（`bun run kb:eval`）は課金・要認証情報のため CI/autonomous では走らせず、静的検証（typecheck・unit・構造テスト・validateCases dry-run）で品質を担保する方針。
 - code B′ の `readPathIncludes:"db.ts"` は実在（`src/kb/db.ts:28` の `tokenize='unicode61'`）と整合。`citationFails` 厳格分岐（読んだ path を含む `path:line`）が要求する引用と一致。
+- ライブ eval のモデル感度: 既定 `claude-haiku-4-5` は code B′（db.ts を読んで unicode61 を path:line 引用）で早々に打ち切り db.ts へ到達せずブレて FAIL しうる。上位ティア（sonnet 相当）を `KB_MODEL` で指定すると安定して 9/9 PASS。判定ロジックの欠陥ではなくモデル能力差。code 系ケースの合否を見るときは上位モデル推奨。
