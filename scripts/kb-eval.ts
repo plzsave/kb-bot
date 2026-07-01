@@ -7,7 +7,7 @@
 // ラップして「どのツールを・どんな引数で呼んだか」を記録し、expect と突き合わせて採点する。
 // 期待は「指定された項目だけ」検査する（未指定は不問）。全項目 PASS でケース合格。
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { createLlm } from "../src/llm/factory.ts";
 import { dbPath } from "../src/config.ts";
@@ -391,6 +391,9 @@ async function main() {
     `eval: provider=${provider.name} model=${model} github=${github ? github.repos.join(",") : "off"} / ${cases.length} ケース\n`,
   );
 
+  // フィクスチャの基準ディレクトリはケース定義ファイルの位置に固定する（cwd 非依存, Req 2.3）。
+  const fixturesBaseDir = join(dirname(casesPath), "fixtures");
+
   const results: CaseResult[] = [];
   const startedAt = Date.now();
 
@@ -409,36 +412,45 @@ async function main() {
       continue;
     }
 
-    const calls: Call[] = [];
-    const tools: AgentTool[] = [
-      recordTool(searchKnowledgeTool(db), calls),
-      ...(github ? githubTools(github).map((t) => recordTool(t, calls)) : []),
-    ];
-
-    // 本番と同じ初期コンテキスト（FTS 上位）＋system を組み立てる。
-    const hits = search(db, c.question, TOP_K);
-    const initialPrompt = `# 初期コンテキスト（FTS検索の上位${hits.length}件）\n\n${formatHits(hits)}\n\n# 質問\n${c.question}`;
-    const messages: LlmMessage[] = [{ role: "user", content: initialPrompt }];
+    // SKIP 判定後にこのケースの検索源 db を選ぶ。fixtures ありは隔離 in-memory 索引、無しは本番共有 db（Req 2.1/5.1）。
+    // 隔離索引の構築は SKIP 判定の後に置く（無駄な構築を避ける, Req 3.1）。
+    const caseDb = c.fixtures && c.fixtures.length > 0 ? buildFixtureDb(c.fixtures, fixturesBaseDir) : db;
 
     try {
-      const result = await runAgent({
-        provider,
-        model,
-        system: buildSystem(github),
-        messages,
-        tools,
-        maxTurns: github ? 8 : 5,
-      });
-      const fails = evalCase(c.expect, calls, result.text);
-      const trace = calls.map((c) => c.name).join(" → ") || "（ツール未使用）";
-      const status: CaseStatus = fails.length === 0 ? "PASS" : "FAIL";
-      console.log(`${statusLabel(status, gate)}  ${c.name}  [${trace}]`);
-      for (const f of fails) console.log(`        - ${f}`);
-      results.push({ name: c.name, axis: c.axis, gate, status, fails });
-    } catch (e) {
-      const message = (e as Error).message;
-      console.log(`${statusLabel("ERROR", gate)} ${c.name}: ${message}`);
-      results.push({ name: c.name, axis: c.axis, gate, status: "ERROR", fails: [message] });
+      const calls: Call[] = [];
+      const tools: AgentTool[] = [
+        recordTool(searchKnowledgeTool(caseDb), calls),
+        ...(github ? githubTools(github).map((t) => recordTool(t, calls)) : []),
+      ];
+
+      // 本番と同じ初期コンテキスト（FTS 上位）＋system を組み立てる。fixtures ありなら stale doc が前置きされる。
+      const hits = search(caseDb, c.question, TOP_K);
+      const initialPrompt = `# 初期コンテキスト（FTS検索の上位${hits.length}件）\n\n${formatHits(hits)}\n\n# 質問\n${c.question}`;
+      const messages: LlmMessage[] = [{ role: "user", content: initialPrompt }];
+
+      try {
+        const result = await runAgent({
+          provider,
+          model,
+          system: buildSystem(github),
+          messages,
+          tools,
+          maxTurns: github ? 8 : 5,
+        });
+        const fails = evalCase(c.expect, calls, result.text);
+        const trace = calls.map((c) => c.name).join(" → ") || "（ツール未使用）";
+        const status: CaseStatus = fails.length === 0 ? "PASS" : "FAIL";
+        console.log(`${statusLabel(status, gate)}  ${c.name}  [${trace}]`);
+        for (const f of fails) console.log(`        - ${f}`);
+        results.push({ name: c.name, axis: c.axis, gate, status, fails });
+      } catch (e) {
+        const message = (e as Error).message;
+        console.log(`${statusLabel("ERROR", gate)} ${c.name}: ${message}`);
+        results.push({ name: c.name, axis: c.axis, gate, status: "ERROR", fails: [message] });
+      }
+    } finally {
+      // 隔離索引はケース終了時に確実に破棄する。本番共有 db は他ケースが使うため閉じない（Error Handling）。
+      if (caseDb !== db) caseDb.close();
     }
   }
 
