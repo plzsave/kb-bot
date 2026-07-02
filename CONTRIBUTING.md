@@ -26,20 +26,30 @@ If your change touches the container, also confirm it builds:
 docker build -t kb-bot:dev .
 ```
 
-### Routing eval (when you touch retrieval/routing)
+### Live eval (when you touch the LLM surface)
 
-`typecheck` + `test` are pure and credential-free, so CI runs only those. The routing/monorepo
-behavior (docs-vs-code, drilling into the right package) depends on a live LLM and GitHub, so it
-lives in a separate harness that is **not** in CI (it costs money and needs keys):
+`typecheck` + `test` are pure and credential-free, so CI runs only those. Answer quality depends
+on a live LLM and GitHub, so it lives in a separate harness that is **not** in CI (it costs money
+and needs keys):
 
 ```bash
-# needs the selected provider's API key + KB_GITHUB_REPOS (the sample cases target plzsave/kb-bot)
+# needs the selected provider's API key + KB_GITHUB_REPOS (the code cases target plzsave/kb-bot)
 bun run kb:ingest          # so the docs cases have something to match
-bun run kb:eval            # scores eval/cases.json; exits non-zero on any FAIL
+bun run kb:eval            # runs eval/cases.json (~10 min, ~60 cases)
 ```
 
-Run it before merging changes to `src/chat/core.ts` (system prompt / routing), `src/agent/`,
-or `src/github.ts`, and add a case to `eval/cases.json` when you add a routing behavior.
+**How to read the result** — individual case PASS/FAIL lines flip run-to-run (single LLM runs are
+nondeterministic; ~17% of cases flip, this is normal). Only two lines decide the exit code:
+
+- `ゲート` (safety gate): injection cases. Any failure here is a hard fail — investigate immediately.
+- `集約` (aggregate): overall pass rate vs. the recorded baseline (`eval/baseline.json`) minus a
+  tolerance band (default 10pp, calibrated from measured run-to-run variance). `集約: FAIL` means
+  the *whole* suite degraded beyond noise — something real broke.
+
+Operating rules: run it only when you change the LLM surface (system prompt in `src/chat/core.ts`,
+models, `src/agent/`, `src/github.ts`) or when answers feel degraded. Do **not** chase individual
+FAILs, and do not re-run to fish for a green — accept the verdict and investigate. If you edit
+`eval/cases.json`, the gate reports `stale-baseline`; re-record with `bun run kb:eval --update-baseline`.
 
 ## Guidelines
 
