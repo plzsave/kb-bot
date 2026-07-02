@@ -58,5 +58,14 @@
       "citesSource": true
     },
     "axis": "B"
+  },
+  {
+    "name": "[次の一歩例] offersNextStep:true で未発見時に次の一歩（対象名/キーワード補足・言い換え・資料追加）を要求する",
+    "question": "弊社の2099年度の売上目標は？",
+    "expect": {
+      "answerOmits": ["おそらく", "推定"],
+      "offersNextStep": true
+    },
+    "axis": "D"
   }
 ]

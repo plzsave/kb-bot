@@ -39,6 +39,8 @@ interface Expect {
   answerOmits?: string[];
   /** 出典必須（軸 B′）。true のとき回答本文に出典の体裁が付いているかを検査する。 */
   citesSource?: boolean;
+  /** 次の一歩必須（軸 D）。true のとき未発見回答に「次の一歩」の手掛かりが含まれるかを検査する。 */
+  offersNextStep?: boolean;
 }
 
 /**
@@ -75,6 +77,44 @@ export function citationFails(expect: Expect, answer: string): string[] {
     return ["出典必須: 回答本文に出典の体裁（.md 資料名 または path:line 引用）が含まれていない"];
   }
   return [];
+}
+
+/**
+ * 「次の一歩」検出の手掛かり語彙（複数語 OR, Req 2.3）。テストと共有できるよう export する。
+ * 未発見時に bot が実際に返す「次の一歩」表現をカバーする 2 系統で構成する:
+ *  (1) 次の一歩を提示する枠組み語（"次のステップ"/"次の一歩"/"お勧め" 等。プロンプトの "next step" を
+ *      モデルが訳出する形。通常の“見つかった回答”には出にくい）。
+ *  (2) docs/USAGE.ja.md「見つかりませんでした」節の具体策（対象名・キーワードを足す／言い換え／
+ *      資料追加で答えられる／担当者に確認）。
+ * いずれも一般語単独一致（"確認"/"情報" 等）を避け、過剰一致しにくい語に限定する。
+ */
+export const NEXT_STEP_CUES = [
+  // (1) 次の一歩を提示する枠組み語
+  "次のステップ",
+  "次の一歩",
+  "お勧め",
+  "おすすめ",
+  // (2) 具体策
+  "キーワード",
+  "具体的に",
+  "言い換え",
+  "資料を追加",
+  "追加すれば",
+  "対象名",
+  "絞り込",
+  "担当者",
+];
+
+/**
+ * 「次の一歩」の手掛かり欠如を検出して日本語 fail 文の配列で返す純粋関数。
+ * offersNextStep が偽/未指定なら空配列（既存判定を変えない, Req 2.4/4.1）。副作用なし・入力不変。
+ */
+export function nextStepFails(expect: Expect, answer: string): string[] {
+  // 次の一歩必須フラグが立っていなければ何も検査しない（Req 2.4: 既存判定を一切変えない）。
+  if (!expect.offersNextStep) return [];
+  // 手掛かり語彙のいずれか 1 つ以上が本文に出現すれば可（Req 2.3）。
+  if (NEXT_STEP_CUES.some((cue) => answer.includes(cue))) return [];
+  return ["次の一歩必須: 回答に次の一歩（キーワード補足・言い換え・資料追加などの具体的手掛かり）が示されていない"];
 }
 
 /** 評価軸の許容集合。スコアカードはこの軸ごとに到達度を集計する。 */
@@ -165,6 +205,8 @@ export function evalCase(expect: Expect, calls: Call[], answer: string): string[
 
   // 出典体裁の採点を末尾に統合（citesSource 未指定なら空配列＝既存判定は不変, Req 1.1/4.3）。
   fails.push(...citationFails(expect, answer));
+  // 「次の一歩」の採点を末尾に統合（offersNextStep 未指定なら空配列＝既存判定は不変, Req 2.1/4.1）。
+  fails.push(...nextStepFails(expect, answer));
 
   return fails;
 }
