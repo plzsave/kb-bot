@@ -32,6 +32,32 @@ test("buildSystem: GitHub 有効時はコード優先の追記が付く", () => 
   expect(s).toContain("o/r1, o/r2");
 });
 
+test("buildSystem: GitHub 有効時は『見つからない前にコードを確認』を必須化する", () => {
+  const gh = { repos: ["o/r1"] } as unknown as GitHub;
+  const s = buildSystem(gh);
+  // 未発見宣言前のコード確認を促す（Req 1.1/1.2）。
+  expect(s).toContain("before giving up");
+  expect(s).toContain("search_repo_code");
+  expect(s).toContain("read_repo_file");
+  // docs miss だけでは諦めない旨（Req 1.2）。
+  expect(s).toContain("docs miss alone is not enough");
+});
+
+test("buildSystem: GitHub 無効時は『コード確認の必須化』を出さない（無効時は不適用, Req 1.4）", () => {
+  const s = buildSystem(); // GitHub なし
+  expect(s).not.toContain("before giving up");
+  expect(s).not.toContain("search_repo_code");
+});
+
+test("buildSystem: コード確認追記後も [Safety]/[Output style]/#31 next-step/言語自動判別を保持する（Req 1.5）", () => {
+  const gh = { repos: ["o/r1"] } as unknown as GitHub;
+  const s = buildSystem(gh);
+  expect(s).toContain("REFERENCE MATERIAL"); // [Safety]
+  expect(s).toContain("conclusion first"); // [Output style]
+  expect(s).toContain("next step"); // #31 next-step
+  expect(s).toContain("SAME language as the user's question"); // 言語自動判別
+});
+
 test("buildSystem: extra はベースを保ったまま末尾に連結される", () => {
   const s = buildSystem(undefined, "  Explain things more simply.  ");
   expect(s).toContain("[Safety]"); // ベースの安全指示は維持
