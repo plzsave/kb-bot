@@ -92,7 +92,7 @@
   },
   {
     "name": "D 次の一歩: 未発見でも行き止まらせない",
-    "question": "kb-bot の有料プランの月額料金はいくらですか？",
+    "question": "kb-bot プロジェクトの2026年度の開発予算はいくらですか？",
     "expect": {
       "answerOmits": ["おそらく", "推定では", "と思われます"],
       "offersNextStep": true
