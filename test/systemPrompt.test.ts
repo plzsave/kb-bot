@@ -12,6 +12,19 @@ test("buildSystem: ベースは英語で自動判別を指示する", () => {
   expect(s).not.toContain("日本語で答えます");
 });
 
+test("buildSystem: 未発見時に『次の一歩』を促す指示が入り、[Safety]/[Output style] は保持される", () => {
+  const s = buildSystem();
+  // 未発見時に行き止まらせず次の一歩を促す（軸 D, Req 1.1）。
+  expect(s).toContain("next step");
+  // 既存の推測禁止（do not guess）は維持（Req 1.2）。
+  expect(s).toContain("do not guess");
+  // [Safety]/[Output style] の既存キーフレーズが弱まっていないこと（Req 1.4）。
+  expect(s).toContain("[Safety]");
+  expect(s).toContain("REFERENCE MATERIAL");
+  expect(s).toContain("[Output style]");
+  expect(s).toContain("conclusion first");
+});
+
 test("buildSystem: GitHub 有効時はコード優先の追記が付く", () => {
   const gh = { repos: ["o/r1", "o/r2"] } as unknown as GitHub;
   const s = buildSystem(gh);
