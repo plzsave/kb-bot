@@ -1,0 +1,22 @@
+{
+  "feature_name": "reduce-dead-ends",
+  "created_at": "2026-07-02T05:43:16Z",
+  "updated_at": "2026-07-02T05:46:00Z",
+  "language": "ja",
+  "phase": "tasks-generated",
+  "approvals": {
+    "requirements": {
+      "generated": true,
+      "approved": true
+    },
+    "design": {
+      "generated": true,
+      "approved": true
+    },
+    "tasks": {
+      "generated": true,
+      "approved": true
+    }
+  },
+  "ready_for_implementation": true
+}
