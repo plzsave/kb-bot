@@ -3,10 +3,10 @@ import type { LlmMessage, LlmProvider } from "../llm/provider.ts";
 import { search, isSubstantiveTopHit } from "../kb/db.ts";
 import { getCachedAnswer, putCachedAnswer } from "../cache.ts";
 import { logUsage } from "../usage.ts";
-import { runAgent, type AgentTool, type RunAgentOpts, type RunAgentResult } from "../agent/agent.ts";
+import { type AgentTool } from "../agent/agent.ts";
+import { runWithEscalation } from "../agent/escalation.ts";
 import { searchKnowledgeTool, formatHits } from "../agent/tools.ts";
 import { githubTools } from "../agent/githubTools.ts";
-import { isModelNotFoundError } from "../llm/errors.ts";
 import { uiText } from "./messages.ts";
 import type { GitHub } from "../github.ts";
 
@@ -96,26 +96,6 @@ export function normalizeHistory(history: HistoryTurn[]): LlmMessage[] {
   return out;
 }
 
-// runAgent を実行し、指定モデルが 404/退役なら既定モデル（各社エイリアス＝最も生きている可能性が高い）で
-// 一度だけ再試行する。常駐中にモデルが退役しても、再起動なしに回答を継続させるための安全網。
-// 既定モデル自体が落ちている場合は再試行できないので、そのまま投げて呼び出し側のエラー処理に任せる。
-async function runAgentWithFallback(
-  opts: RunAgentOpts,
-): Promise<{ result: RunAgentResult; modelUsed: string; fellBack: boolean }> {
-  try {
-    return { result: await runAgent(opts), modelUsed: opts.model, fellBack: false };
-  } catch (e) {
-    const fallback = opts.provider.defaultModel;
-    if (isModelNotFoundError(e) && opts.model !== fallback) {
-      console.warn(
-        `[answer] モデル ${opts.model} が利用不可（退役の可能性）。既定 ${fallback} にフォールバックします。`,
-      );
-      return { result: await runAgent({ ...opts, model: fallback }), modelUsed: fallback, fellBack: true };
-    }
-    throw e;
-  }
-}
-
 /** 質問テキストを受け、reply 経由で回答する（プラットフォーム非依存）。history はスレッド文脈（任意）。 */
 export async function answer(
   question: string,
@@ -177,26 +157,6 @@ export async function answer(
     { role: "user", content: initialPrompt },
   ];
 
-  // 1 回の実行。再実行（B 昇格）時に表示が混ざらないよう逐次バッファを毎回リセットする。
-  // 整合性の肝：ここで「意図したモデル」を渡し、404/退役なら既定モデルへフォールバックする
-  // （runAgentWithFallback）。昇格＝どのティアを狙うか／フォールバック＝生きたモデルを保証、を分離する。
-  const runOnce = async (m: string): Promise<{ result: RunAgentResult; modelUsed: string; fellBack: boolean }> => {
-    pending = "";
-    lastEdit = 0;
-    return runAgentWithFallback({
-      provider,
-      model: m,
-      system: buildSystem(github, systemExtra),
-      messages,
-      tools,
-      maxTurns,
-      onDelta: (t) => {
-        pending += t;
-        void flush(false);
-      },
-    });
-  };
-
   // A: 事前ヒューリスティック。GitHub 有効かつ FTS が「空 or 実質空振り（最上位ヒットが質問に実質無関係）」
   //    ＝ナレッジに無いコード探索質問の可能性が高く、tree→search→read と手数も要るので最初から上位ティアで
   //    始める（後追い昇格の二重課金を避ける）。dropWeakHits が最上位を無条件に残すため hits.length===0 だけ
@@ -206,16 +166,27 @@ export async function answer(
   // LLM 呼び出しは失敗しうる（レート制限・ネットワーク・キー不正等）。失敗時に「考え中…」のまま
   // 固まる/未処理例外で落ちることを防ぎ、プレースホルダをエラー文言に置き換える。
   try {
-    let { result, modelUsed, fellBack } = await runOnce(startHard ? modelHard! : model);
-    let escalated = startHard;
-
-    // B: 最安で打ち切られた（ターン上限到達＝手に負えなかった）時だけ上位ティアで再実行して救済する。
-    //    「ナレッジに無い」自己申告では昇格しない（上位でも知識は増えず無駄打ちになるため）。
-    if (!startHard && canEscalate && result.truncated) {
-      escalated = true;
-      await handle.update(ui.thinkingHard);
-      ({ result, modelUsed, fellBack } = await runOnce(modelHard!));
-    }
+    // 昇格 orchestration（A/B＋404 フォールバック）は runWithEscalation に共有。逐次表示は onDelta、
+    // B 経路再実行時の表示リセット＋「考え中（上位ティア）」は onEscalate で行う（挙動は従来と不変）。
+    const { result, modelUsed, fellBack, escalated } = await runWithEscalation({
+      provider,
+      model,
+      modelHard,
+      system: buildSystem(github, systemExtra),
+      messages,
+      tools,
+      maxTurns,
+      startHard,
+      onDelta: (t) => {
+        pending += t;
+        void flush(false);
+      },
+      onEscalate: async () => {
+        pending = "";
+        lastEdit = 0;
+        await handle.update(ui.thinkingHard);
+      },
+    });
 
     const finalText = result.text.trim() || ui.empty;
     await handle.update(finalText);
