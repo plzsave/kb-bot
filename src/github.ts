@@ -8,7 +8,92 @@ const MAX_TREE = 800; // ファイル一覧（小規模リポ/サブディレク
 const MAX_OVERVIEW_DIRS = 60; // モノレポ概要で出すディレクトリ数の上限
 const MAX_MANIFESTS = 200; // モノレポ概要で出す manifest（パッケージの目印）数の上限
 const MAX_RANGE_LINES = 400; // 行範囲指定時の最大行数
-const SEARCH_RESULTS = 20; // コード検索の取得件数（モノレポで上位に埋もれないよう 10→20）
+const SEARCH_RESULTS = 20; // コード検索で返す path:line 行の総数上限（モノレポで上位に埋もれないよう）
+const MAX_GREP_FILES = 300; // grep のため取得する候補ファイル数の上限。単一リポ〜中規模を全走査できる水準に。
+// 超大規模（モノレポ）ではこの cap を超える＝パス名一致を優先した上位のみ走査。取りこぼしは path 引数で絞って回避。
+const GREP_CONCURRENCY = 24; // blob 並列取得数（逐次だと大きいリポで遅い）
+const MAX_GREP_BLOB = 256 * 1024; // grep 対象にする 1 ファイルの最大バイト（巨大生成物/lockを除外）
+const MAX_MATCHES_PER_FILE = 3; // 1 ファイルから返す一致行の上限（結果をファイル横断で散らす）
+
+// grep 対象にするテキスト系拡張子。バイナリ・巨大生成物・lock/min を除外して無駄な取得を避ける。
+const TEXT_EXT =
+  /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|kt|kts|rb|php|cs|c|h|cc|cpp|hpp|swift|scala|sh|bash|zsh|sql|md|mdx|json|jsonc|toml|ya?ml|txt|html?|css|scss|sass|less|vue|svelte|gradle|xml|ini|cfg|conf|proto|graphql|gql|dockerfile)$/i;
+const NON_TEXT =
+  /(^|\/)(package-lock\.json|bun\.lock|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|composer\.lock|go\.sum)$|\.min\.(js|css)$|\.map$/i;
+
+/** grep 対象にするテキストファイルか（拡張子で判定・lock/min は除外）。純関数。 */
+export function isTextPath(path: string): boolean {
+  if (NON_TEXT.test(path)) return false;
+  return TEXT_EXT.test(path);
+}
+
+/** 検索語を空白区切りで語に分割（小文字化・トリム・重複除去）。識別子（TTL_MS 等）は分割しない。純関数。 */
+export function searchTerms(query: string): string[] {
+  return [...new Set(query.toLowerCase().split(/\s+/).map((s) => s.trim()).filter(Boolean))];
+}
+
+/**
+ * fetch 対象の候補ファイルを選定して並べる純関数。全ファイルを取りに行くと遅い/レート制限に当たるため、
+ * (1) テキスト系のみに絞り、(2) パス名に検索語を多く含むものを優先（cache.ts＝キャッシュ質問など
+ * ファイル名の直感が効く場面を安く当てる）、(3) 一致0のファイルも後ろに残す（内容一致を拾うため）。
+ * 安定ソート（同スコアは元順）で決定的。cap 件に切り詰める。副作用なし・入力不変。
+ */
+export function selectSearchCandidates(paths: string[], terms: string[], cap = MAX_GREP_FILES): string[] {
+  const textish = paths.filter(isTextPath);
+  if (terms.length === 0) return textish.slice(0, cap);
+  const score = (p: string) => {
+    const lp = p.toLowerCase();
+    return terms.reduce((n, t) => n + (lp.includes(t) ? 1 : 0), 0);
+  };
+  const indexed = textish.map((p, i) => ({ p, i, s: score(p) }));
+  indexed.sort((a, b) => b.s - a.s || a.i - b.i); // スコア降順・同スコアは元順（安定）
+  return indexed.slice(0, cap).map((x) => x.p);
+}
+
+export interface GrepMatch {
+  path: string;
+  line: number; // 1 始まり
+  text: string;
+}
+
+/**
+ * 候補ファイル（path + 内容）を grep して path:line 一致を返す純関数（ネットワーク非依存＝テスト可能）。
+ * まず「同一行に全語（AND）」で厳密一致を探し、総数 0 なら「いずれかの語（OR）」に緩めて必ず何かを返す
+ * （空を返すと LLM が『コードに無い』と誤解して stale doc にフォールバックするため。broadened で明示）。
+ * files の順序（＝候補ランク順）を保ち、各ファイル内は行番号順。maxPerFile でファイル横断に散らし、
+ * maxTotal で全体を打ち切る。副作用なし・入力不変。
+ */
+export function grepFiles(
+  files: { path: string; content: string }[],
+  terms: string[],
+  opts: { maxTotal?: number; maxPerFile?: number } = {},
+): { matches: GrepMatch[]; broadened: boolean } {
+  const maxTotal = opts.maxTotal ?? SEARCH_RESULTS;
+  const maxPerFile = opts.maxPerFile ?? MAX_MATCHES_PER_FILE;
+  if (terms.length === 0) return { matches: [], broadened: false };
+
+  const scan = (all: boolean): GrepMatch[] => {
+    const out: GrepMatch[] = [];
+    for (const f of files) {
+      let perFile = 0;
+      const lines = f.content.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        const lower = lines[i]!.toLowerCase();
+        const hit = all ? terms.every((t) => lower.includes(t)) : terms.some((t) => lower.includes(t));
+        if (!hit) continue;
+        out.push({ path: f.path, line: i + 1, text: lines[i]!.trim().slice(0, 200) });
+        if (++perFile >= maxPerFile) break;
+        if (out.length >= maxTotal) return out;
+      }
+      if (out.length >= maxTotal) break;
+    }
+    return out;
+  };
+
+  const strict = scan(true);
+  if (strict.length > 0) return { matches: strict, broadened: false };
+  return { matches: scan(false), broadened: true };
+}
 
 // パッケージ/プロジェクトの根を示すファイル名。モノレポで「どこに何があるか」の地図になる。
 const MANIFEST =
@@ -113,6 +198,36 @@ function withLineNumbers(text: string, from: number): string {
     .join("\n");
 }
 
+// tree の blob を sha 指定で並列取得しテキスト化する（raw.githubusercontent はプライベート不可のため
+// blob API を使う＝トークンでプライベートリポも読める）。候補順を保った {path, content} を返す。
+// 取得失敗・非base64はスキップ（部分結果でも grep する＝空振りより有用）。副作用はネットワークのみ。
+async function fetchTextBlobs(
+  token: string | undefined,
+  repo: string,
+  items: { path: string; sha: string }[],
+  concurrency = GREP_CONCURRENCY,
+): Promise<{ path: string; content: string }[]> {
+  const byPath = new Map<string, string>();
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const it = items[next++]!;
+      try {
+        const res = await fetch(`${API}/repos/${repo}/git/blobs/${it.sha}`, { headers: headers(token) });
+        if (!res.ok) continue;
+        const j = (await res.json()) as { content?: string; encoding?: string };
+        if (j.content == null || j.encoding !== "base64") continue;
+        byPath.set(it.path, decodeBase64(j.content));
+      } catch {
+        /* 個別失敗はスキップ（部分結果で grep） */
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  // 候補順（selectSearchCandidates の並び）を保って返す。並列取得の完了順に依存しない＝決定的。
+  return items.filter((it) => byPath.has(it.path)).map((it) => ({ path: it.path, content: byPath.get(it.path)! }));
+}
+
 export function createGitHub(token: string | undefined, repos: string[]): GitHub {
   const allow = new Set(repos.map((r) => r.toLowerCase()));
 
@@ -183,24 +298,58 @@ export function createGitHub(token: string | undefined, repos: string[]): GitHub
       }
     },
 
+    // コード検索は GitHub の /search/code に依存しない自前 grep で行う。理由: レガシー code search API は
+    // fine-grained PAT では常に 0 件を返し（エラーでなく静かに空）、小規模リポは classic でもインデックス
+    // 欠落しうる。tree（既定ブランチ）→ 候補ファイルを blob で並列取得 → ローカル grep なら、トークン種別にも
+    // GitHub のインデックスにも依存せず path:line で当てられる。read_repo_file で使う root（tree+blob）と同じ権限。
     async searchCode(repo, query, path) {
-      if (!token) return "（コード検索には GITHUB_TOKEN が必要です。list_repo_tree + read_repo_file を使ってください）";
+      const terms = searchTerms(query);
+      if (terms.length === 0) return "（検索語が空でした）";
       try {
-        // path 指定時は path: 修飾子で範囲を絞る（モノレポで該当パッケージ配下だけ探す）。
-        const scope = path ? ` path:${path.replace(/^\/+|\/+$/g, "")}` : "";
-        const q = encodeURIComponent(`${query} repo:${repo}${scope}`);
-        const res = await fetch(`${API}/search/code?q=${q}&per_page=${SEARCH_RESULTS}`, {
-          headers: { ...headers(token), Accept: "application/vnd.github.text-match+json" },
+        const metaRes = await fetch(`${API}/repos/${repo}`, { headers: headers(token) });
+        if (!metaRes.ok) return `（${repo} のメタ取得に失敗: HTTP ${metaRes.status}）`;
+        const branch = ((await metaRes.json()) as { default_branch?: string }).default_branch ?? "main";
+        const treeRes = await fetch(`${API}/repos/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`, {
+          headers: headers(token),
         });
-        if (!res.ok) return `（${repo} のコード検索に失敗: HTTP ${res.status}）`;
-        const j = (await res.json()) as { total_count?: number; items?: { path?: string }[] };
-        const paths = (j.items ?? []).map((i) => i.path).filter(Boolean);
-        if (paths.length === 0) return `（"${query}"${path ? `（path:${path}）` : ""} に一致するファイルは見つかりませんでした）`;
-        const more =
-          (j.total_count ?? paths.length) > paths.length
-            ? `\n（全 ${j.total_count} 件中 上位 ${paths.length} 件。絞りたい時は path で範囲指定）`
-            : "";
-        return `一致したファイル（read_repo_file で中身を読む）:\n${paths.join("\n")}${more}`;
+        if (!treeRes.ok) return `（${repo} のツリー取得に失敗: HTTP ${treeRes.status}）`;
+        const tree = (await treeRes.json()) as {
+          tree?: { path?: string; type?: string; sha?: string; size?: number }[];
+          truncated?: boolean;
+        };
+
+        // path 指定時はその配下に絞る（モノレポで該当パッケージだけ探す）。秘匿ファイル・巨大ファイルは除外。
+        const prefix = path ? path.replace(/^\/+|\/+$/g, "") + "/" : "";
+        const blobs = (tree.tree ?? []).filter(
+          (n): n is { path: string; type: string; sha: string; size?: number } =>
+            n.type === "blob" &&
+            typeof n.path === "string" &&
+            typeof n.sha === "string" &&
+            (!prefix || n.path.startsWith(prefix)) &&
+            !rejectPath(n.path) &&
+            (n.size == null || n.size <= MAX_GREP_BLOB),
+        );
+
+        // 候補を選定（テキスト系＋パス名一致を優先）してから blob を並列取得＝取得数を cap で抑える。
+        const candidatePaths = selectSearchCandidates(
+          blobs.map((b) => b.path),
+          terms,
+        );
+        const shaByPath = new Map(blobs.map((b) => [b.path, b.sha]));
+        const items = candidatePaths.map((p) => ({ path: p, sha: shaByPath.get(p)! }));
+        const files = await fetchTextBlobs(token, repo, items);
+
+        const { matches, broadened } = grepFiles(files, terms, { maxTotal: SEARCH_RESULTS });
+        const scopeNote = path ? `（path:${path}）` : "";
+        if (matches.length === 0) {
+          return `（"${query}"${scopeNote} に一致する行は見つかりませんでした。list_repo_tree で構成を確認し read_repo_file で読むこともできます）`;
+        }
+        const lines = matches.map((m) => `${m.path}:${m.line}: ${m.text}`).join("\n");
+        const head = broadened
+          ? `一致（いずれかの語・厳密一致なし。read_repo_file で確認）:`
+          : `一致した箇所（read_repo_file で該当ファイルを読む）:`;
+        const truncNote = tree.truncated ? "\n（注: ツリーが GitHub 側で切り詰め。一部ファイル未走査の可能性）" : "";
+        return `${head}\n${lines}${truncNote}`;
       } catch (e) {
         return `（${repo} のコード検索でエラー: ${e instanceof Error ? e.message : "unknown"}）`;
       }
