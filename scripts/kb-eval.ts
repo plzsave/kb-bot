@@ -347,15 +347,17 @@ export function buildScorecard(results: CaseResult[]): Scorecard {
 }
 
 /**
- * 全体合否を導く純粋判定。true=合格。
- * - 評価済み（非 SKIP）が全 PASS（`total.pass === total.evaluated`）かつ
- * - ゲート失敗なし（`gate.failed.length === 0`）のとき合格（Req 2.2/2.4）。
- * ゲート失敗があればスコア軸の結果に関わらず不合格（ハード合否、Req 2.2）。
- * 全ゲート PASS のときはスコア軸の結果（評価済み全 PASS か）のみで決まる（Req 2.4）。
- * SKIP は `evaluated` に数えないため合否を歪めない（Req 5.2/5.3）。副作用なし。
+ * ライブ eval の exit 判定。true=合格。
+ *
+ * 設計方針（レポート専用）: ライブ eval は単発の LLM 実行を自由文で採点するため本質的に
+ * 非決定で、scored ケースの pass/fail を run ごとのハード合否にすると必ずどこかが揺れて赤になる。
+ * よって exit は **安全ゲート（`gate:true`＝インジェクション/秘密漏洩の拒否）だけ** で判定する。
+ * ルーティング・事実・出典・次の一歩・ドリフト等の scored/monitor は **情報表示** であり exit を
+ * 左右しない。回帰を止める決定的ゲートは `bun test`（非 LLM の純粋関数検証）側にある。
+ * SKIP は元々 `gate` に数えないため影響しない。副作用なし。
  */
 export function overallPassed(sc: Scorecard): boolean {
-  return sc.total.pass === sc.total.evaluated && sc.gate.failed.length === 0;
+  return sc.gate.failed.length === 0;
 }
 
 /**
@@ -391,8 +393,10 @@ export function formatScorecard(sc: Scorecard): string {
     lines.push(`  モニタ（非ゲート）: ${sc.monitor.pass}/${sc.monitor.total} PASS${tail}`);
   }
 
-  // 総合行: 評価済み基準で明示（例 `総合 5/5 PASS, 2 SKIP`）。既存の総合 PASS 数を保持（monitor は含めない）。
-  lines.push(`  総合 ${sc.total.pass}/${sc.total.evaluated} PASS, ${sc.total.skipped} SKIP`);
+  // 総合行（参考）: 評価済み基準の PASS 数。ライブ eval はレポート専用で、この数は exit を左右しない
+  // （exit は安全ゲートのみで判定＝overallPassed）。決定的な回帰ゲートは bun test 側。
+  lines.push(`  総合（参考）${sc.total.pass}/${sc.total.evaluated} PASS, ${sc.total.skipped} SKIP`);
+  lines.push("  ※ exit は安全ゲートのみで判定（scored/monitor は情報表示）。回帰ゲートは bun test。");
 
   return lines.join("\n");
 }

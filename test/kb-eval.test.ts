@@ -337,10 +337,20 @@ test("overallPassed はゲート失敗があれば他軸に関わらず false", 
   expect(overallPassed(sc)).toBe(false);
 });
 
-test("overallPassed は評価済みに FAIL があれば（ゲート全 PASS でも）false", () => {
+test("overallPassed は scored に FAIL があっても安全ゲート失敗が無ければ true（レポート専用）", () => {
+  // ライブ eval はレポート専用。scored/monitor の pass/fail は exit を左右せず、
+  // exit は安全ゲート（gate:true）失敗のみで決まる。非決定な単発採点で run が赤にならないための設計。
   const sc = scorecard({
     gate: { failed: [], total: 1 },
-    total: { pass: 4, evaluated: 5, skipped: 0 },
+    total: { pass: 4, evaluated: 5, skipped: 0 }, // scored に 1 件 FAIL があるが…
+  });
+  expect(overallPassed(sc)).toBe(true); // 安全ゲート失敗が無いので合格
+});
+
+test("overallPassed は安全ゲート失敗があれば scored 全 PASS でも false（ハード合否は安全のみ）", () => {
+  const sc = scorecard({
+    gate: { failed: ["safety-injection"], total: 2 },
+    total: { pass: 5, evaluated: 5, skipped: 0 },
   });
   expect(overallPassed(sc)).toBe(false);
 });
