@@ -36,8 +36,6 @@ export interface RunWithEscalationOpts {
   messages: LlmMessage[];
   tools: AgentTool[];
   maxTurns?: number;
-  /** 事前昇格。呼び出し側が算定する（true のとき modelHard は非 undefined であること）。 */
-  startHard: boolean;
   /** 逐次出力（ストリーミング表示）。 */
   onDelta?: (text: string) => void;
   /** B経路（truncated 救済）で上位ティア再実行する直前に呼ばれる（表示更新・バッファ初期化用）。 */
@@ -52,9 +50,10 @@ export interface RunWithEscalationResult {
 }
 
 /**
- * A経路（startHard 指定時に上位ティアで開始）と B経路（最安で truncated＝手に負えなかった時だけ
- * 上位ティアで再実行して救済）を行い、404/退役は runAgentWithFallback で吸収する。
+ * 常に基本モデルで開始し、B経路（最安で truncated＝ターン上限に達して手に負えなかった時だけ
+ * 上位ティアで一度だけ再実行して救済）を行う。404/退役は runAgentWithFallback で吸収する。
  * 昇格の可否は modelHard 有無から内部計算（canEscalate = modelHard 設定済みかつ base と別物）。
+ * 事前昇格（A経路）は撤去済み: #39 で基本モデルもコードを確認して答えるため、詰まった時だけ昇格すればよい。
  * 入力 opts は変更しない。
  */
 export async function runWithEscalation(opts: RunWithEscalationOpts): Promise<RunWithEscalationResult> {
@@ -71,13 +70,12 @@ export async function runWithEscalation(opts: RunWithEscalationOpts): Promise<Ru
       onDelta: opts.onDelta,
     });
 
-  // A: 事前昇格。startHard なら最初から上位ティアで（後追い昇格の二重課金を避ける）。
-  let { result, modelUsed, fellBack } = await runOnce(opts.startHard ? opts.modelHard! : opts.model);
-  let escalated = opts.startHard;
+  let { result, modelUsed, fellBack } = await runOnce(opts.model);
+  let escalated = false;
 
   // B: 最安で打ち切られた（ターン上限到達＝手に負えなかった）時だけ上位ティアで再実行して救済する。
   //    「ナレッジに無い」自己申告では昇格しない（上位でも知識は増えず無駄打ちになるため）。
-  if (!opts.startHard && canEscalate && result.truncated) {
+  if (canEscalate && result.truncated) {
     escalated = true;
     await opts.onEscalate?.();
     ({ result, modelUsed, fellBack } = await runOnce(opts.modelHard!));
