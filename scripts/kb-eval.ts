@@ -11,7 +11,7 @@ import { dirname, join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { createLlm } from "../src/llm/factory.ts";
 import { dbPath } from "../src/config.ts";
-import { openDb, replaceDoc, search, isSubstantiveTopHit } from "../src/kb/db.ts";
+import { openDb, replaceDoc, search } from "../src/kb/db.ts";
 import { chunkMarkdown } from "../src/kb/chunk.ts";
 import { loadGitHub } from "../src/github.ts";
 import { type AgentTool } from "../src/agent/agent.ts";
@@ -459,7 +459,6 @@ async function main() {
   const cases = raw as Case[];
 
   const { provider, model, modelHard } = createLlm();
-  const canEscalate = !!modelHard && modelHard !== model;
   const db = openDb(dbPath());
   const github = loadGitHub();
   console.log(
@@ -506,9 +505,8 @@ async function main() {
       const messages: LlmMessage[] = [{ role: "user", content: initialPrompt }];
 
       try {
-        // 本番と同じ基準で事前昇格を判定し、本番と同じ orchestration（runWithEscalation）で走らせる。
-        // これで eval が escalation を通り production を代表する（KB_MODEL_HARD 未設定なら基本モデルのみ）。
-        const startHard = canEscalate && !!github && !isSubstantiveTopHit(c.question, hits);
+        // 本番と同じ orchestration（runWithEscalation）で走らせる＝eval が production を代表する。
+        // 基本モデルで開始し、truncated 時のみ B経路で昇格（KB_MODEL_HARD 未設定なら基本モデルのみ）。
         const { result, modelUsed, escalated } = await runWithEscalation({
           provider,
           model,
@@ -517,7 +515,6 @@ async function main() {
           messages,
           tools,
           maxTurns: github ? 8 : 5,
-          startHard,
         });
         const fails = evalCase(c.expect, calls, result.text);
         const trace = calls.map((c) => c.name).join(" → ") || "（ツール未使用）";

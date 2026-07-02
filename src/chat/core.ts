@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { LlmMessage, LlmProvider } from "../llm/provider.ts";
-import { search, isSubstantiveTopHit } from "../kb/db.ts";
+import { search } from "../kb/db.ts";
 import { getCachedAnswer, putCachedAnswer } from "../cache.ts";
 import { logUsage } from "../usage.ts";
 import { type AgentTool } from "../agent/agent.ts";
@@ -111,8 +111,6 @@ export async function answer(
   const ui = uiText(q);
   // 追加システムプロンプトは 1 回の回答につき一度だけ解決する（実体は TTL キャッシュ付きで再起動不要）。
   const systemExtra = deps.loadSystemExtra ? await deps.loadSystemExtra() : "";
-  // 上位ティアが基本と別物として設定されている時だけ昇格しうる（未設定/同一なら無効＝現状互換）。
-  const canEscalate = !!modelHard && modelHard !== model;
   // 回答キャッシュの namespace。プロバイダ/基本モデルを切り替えたら旧回答を配信しない
   // （別 namespace＝別キー）。昇格やフォールバックで実際に答えたティアではなく、この設定が起点の同一性。
   const cacheNs = `${provider.name}:${model}`;
@@ -157,17 +155,12 @@ export async function answer(
     { role: "user", content: initialPrompt },
   ];
 
-  // A: 事前ヒューリスティック。GitHub 有効かつ FTS が「空 or 実質空振り（最上位ヒットが質問に実質無関係）」
-  //    ＝ナレッジに無いコード探索質問の可能性が高く、tree→search→read と手数も要るので最初から上位ティアで
-  //    始める（後追い昇格の二重課金を避ける）。dropWeakHits が最上位を無条件に残すため hits.length===0 だけ
-  //    では無関係1件で発火しない。関連性シグナル（内容語カバレッジ）で実質空振りも拾う。
-  const startHard = canEscalate && !!github && !isSubstantiveTopHit(q, hits);
-
   // LLM 呼び出しは失敗しうる（レート制限・ネットワーク・キー不正等）。失敗時に「考え中…」のまま
   // 固まる/未処理例外で落ちることを防ぎ、プレースホルダをエラー文言に置き換える。
   try {
-    // 昇格 orchestration（A/B＋404 フォールバック）は runWithEscalation に共有。逐次表示は onDelta、
-    // B 経路再実行時の表示リセット＋「考え中（上位ティア）」は onEscalate で行う（挙動は従来と不変）。
+    // 昇格 orchestration（B経路＝truncated 救済＋404 フォールバック）は runWithEscalation に共有。
+    // 基本モデルで開始し（#39 でコードを確認して答える）、詰まった時だけ上位へ。逐次表示は onDelta、
+    // B 経路再実行時の表示リセット＋「考え中（上位ティア）」は onEscalate で行う。
     const { result, modelUsed, fellBack, escalated } = await runWithEscalation({
       provider,
       model,
@@ -176,7 +169,6 @@ export async function answer(
       messages,
       tools,
       maxTurns,
-      startHard,
       onDelta: (t) => {
         pending += t;
         void flush(false);
