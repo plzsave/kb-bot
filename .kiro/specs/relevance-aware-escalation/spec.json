@@ -1,0 +1,22 @@
+{
+  "feature_name": "relevance-aware-escalation",
+  "created_at": "2026-07-02T06:17:03Z",
+  "updated_at": "2026-07-02T06:19:00Z",
+  "language": "ja",
+  "phase": "tasks-generated",
+  "approvals": {
+    "requirements": {
+      "generated": true,
+      "approved": true
+    },
+    "design": {
+      "generated": true,
+      "approved": true
+    },
+    "tasks": {
+      "generated": true,
+      "approved": true
+    }
+  },
+  "ready_for_implementation": true
+}
