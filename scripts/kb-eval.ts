@@ -11,10 +11,11 @@ import { dirname, join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { createLlm } from "../src/llm/factory.ts";
 import { dbPath } from "../src/config.ts";
-import { openDb, replaceDoc, search } from "../src/kb/db.ts";
+import { openDb, replaceDoc, search, isSubstantiveTopHit } from "../src/kb/db.ts";
 import { chunkMarkdown } from "../src/kb/chunk.ts";
 import { loadGitHub } from "../src/github.ts";
-import { runAgent, type AgentTool } from "../src/agent/agent.ts";
+import { type AgentTool } from "../src/agent/agent.ts";
+import { runWithEscalation } from "../src/agent/escalation.ts";
 import { searchKnowledgeTool, formatHits } from "../src/agent/tools.ts";
 import { githubTools } from "../src/agent/githubTools.ts";
 import { buildSystem } from "../src/chat/core.ts";
@@ -426,11 +427,12 @@ async function main() {
   // 検証成功後に Case[] へ narrow（validateCases 通過＝axis は有効値・gate は真偽値）。
   const cases = raw as Case[];
 
-  const { provider, model } = createLlm();
+  const { provider, model, modelHard } = createLlm();
+  const canEscalate = !!modelHard && modelHard !== model;
   const db = openDb(dbPath());
   const github = loadGitHub();
   console.log(
-    `eval: provider=${provider.name} model=${model} github=${github ? github.repos.join(",") : "off"} / ${cases.length} ケース\n`,
+    `eval: provider=${provider.name} model=${model} modelHard=${modelHard ?? "-"} github=${github ? github.repos.join(",") : "off"} / ${cases.length} ケース\n`,
   );
 
   // フィクスチャの基準ディレクトリはケース定義ファイルの位置に固定する（cwd 非依存, Req 2.3）。
@@ -471,18 +473,24 @@ async function main() {
       const messages: LlmMessage[] = [{ role: "user", content: initialPrompt }];
 
       try {
-        const result = await runAgent({
+        // 本番と同じ基準で事前昇格を判定し、本番と同じ orchestration（runWithEscalation）で走らせる。
+        // これで eval が escalation を通り production を代表する（KB_MODEL_HARD 未設定なら基本モデルのみ）。
+        const startHard = canEscalate && !!github && !isSubstantiveTopHit(c.question, hits);
+        const { result, modelUsed, escalated } = await runWithEscalation({
           provider,
           model,
+          modelHard,
           system: buildSystem(github),
           messages,
           tools,
           maxTurns: github ? 8 : 5,
+          startHard,
         });
         const fails = evalCase(c.expect, calls, result.text);
         const trace = calls.map((c) => c.name).join(" → ") || "（ツール未使用）";
+        const tier = escalated ? `↑${modelUsed}` : modelUsed;
         const status: CaseStatus = fails.length === 0 ? "PASS" : "FAIL";
-        console.log(`${statusLabel(status, gate)}  ${c.name}  [${trace}]`);
+        console.log(`${statusLabel(status, gate)}  ${c.name}  [${tier}] [${trace}]`);
         for (const f of fails) console.log(`        - ${f}`);
         results.push({ name: c.name, axis: c.axis, gate, status, fails });
       } catch (e) {
