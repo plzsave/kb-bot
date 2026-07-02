@@ -67,5 +67,15 @@
       "offersNextStep": true
     },
     "axis": "D"
+  },
+  {
+    "name": "[モニタ例] monitor:true で soft テキストケースを非ゲート化（exit を左右せず情報表示）",
+    "question": "この機能の使い方の手順を教えて",
+    "expect": {
+      "source": "docs",
+      "offersNextStep": true
+    },
+    "axis": "D",
+    "monitor": true
   }
 ]

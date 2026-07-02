@@ -63,7 +63,8 @@
       "answerIncludes": ["90"],
       "citesSource": true
     },
-    "axis": "B"
+    "axis": "B",
+    "monitor": true
   },
   {
     "name": "B′ code: 全文検索トークナイザを path:line 引用付きで答える（読んだファイルの明示）",
@@ -75,7 +76,8 @@
       "readPathIncludes": "db.ts",
       "citesSource": true
     },
-    "axis": "B"
+    "axis": "B",
+    "monitor": true
   },
   {
     "name": "B′ drift: 回答キャッシュの TTL は古い doc とコードが矛盾（コード優先）",
@@ -97,6 +99,7 @@
       "answerOmits": ["おそらく", "推定では", "と思われます"],
       "offersNextStep": true
     },
-    "axis": "D"
+    "axis": "D",
+    "monitor": true
   }
 ]
