@@ -100,3 +100,35 @@ export function buildMatchQuery(raw: string): string | null {
   const uniq = [...new Set(terms)];
   return uniq.map((t) => `"${t.replace(/"/g, '""')}"`).join(" OR ");
 }
+
+// 「実質空振り」判定のしきい値。FTS の OR 一致は最低 1 語一致を保証するため「1 語以上」では無意味。
+// クエリ内容語の半数以上を最上位ヒットが含めば実質関連とみなす（コーパス非依存＝生 bm25 に非依存）。
+export const REL_MIN_COVERAGE = 0.5;
+
+/**
+ * クエリ内容語カバレッジ（0..1）。query の distinct 内容語（queryTerms）のうち、
+ * text の索引用トークン列（indexTokens）に語として含まれる割合を返す。分母 0 は 0。
+ * 生 bm25 の絶対値には依存しない（コーパス非依存）。副作用なし・入力不変。
+ */
+export function queryCoverage(query: string, text: string): number {
+  const terms = [...new Set(queryTerms(query))];
+  if (terms.length === 0) return 0;
+  const hay = ` ${indexTokens(text)} `; // 前後空白で語境界を作り、部分語誤一致を避ける
+  const matched = terms.filter((t) => hay.includes(` ${t} `)).length;
+  return matched / terms.length;
+}
+
+/**
+ * 最上位ヒットが質問に「実質関連」かを判定する純粋関数。hits が空なら false
+ * （＝従来の hits.length===0 空振りを包含）。そうでなければ最上位ヒットのカバレッジが
+ * しきい値以上かを返す。事前昇格（startHard）の判定にのみ用い、検索の提示・枝刈りは変えない。
+ */
+export function isSubstantiveTopHit(
+  query: string,
+  hits: SearchHit[],
+  minCoverage = REL_MIN_COVERAGE,
+): boolean {
+  const top = hits[0];
+  if (!top) return false;
+  return queryCoverage(query, top.text) >= minCoverage;
+}
