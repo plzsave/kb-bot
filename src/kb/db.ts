@@ -102,8 +102,10 @@ export function buildMatchQuery(raw: string): string | null {
 }
 
 // 「実質空振り」判定のしきい値。FTS の OR 一致は最低 1 語一致を保証するため「1 語以上」では無意味。
-// クエリ内容語の半数以上を最上位ヒットが含めば実質関連とみなす（コーパス非依存＝生 bm25 に非依存）。
-export const REL_MIN_COVERAGE = 0.5;
+// クエリ内容語のこの割合以上を最上位ヒットが含めば実質関連とみなす（コーパス非依存＝生 bm25 に非依存）。
+// 0.34: 答えが docs にある borderline 質問（cov≈0.4。質問語「種類/どんな」等が本文に無く下がる）は
+// 据え置き（過剰昇格を防ぐ）。docs に答えが無いコード質問（cov≤0.2 や空振り 0）は昇格を維持する。
+export const REL_MIN_COVERAGE = 0.34;
 
 /**
  * クエリ内容語カバレッジ（0..1）。query の distinct 内容語（queryTerms）のうち、

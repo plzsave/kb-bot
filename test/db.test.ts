@@ -49,6 +49,19 @@ test("isSubstantiveTopHit は関連 top hit で true・無関係 top hit で fal
   expect(isSubstantiveTopHit(q, [hit("課題 の 進捗 と 対応 コスト")])).toBe(false);
 });
 
+test("isSubstantiveTopHit はしきい値 0.34 近傍で borderline docs を据置・真の空振りを昇格に分ける", () => {
+  // 質問の内容語 5 個のうち 2 個含む本文 → cov=0.40 ≥ 0.34 → substantive（据置）。
+  // 「答えは docs にあるが質問語が一部本文に無い」borderline を過剰昇格させないため。
+  const q = "権限 レベル に は どんな 種類 が あります か"; // 内容語: 権限/レベル/どんな/種類/あります 等
+  const partial = hit("権限 レベル は 閲覧者 編集者 管理者 の 3 種類");
+  expect(queryCoverage(q, partial.text)).toBeGreaterThanOrEqual(0.34);
+  expect(isSubstantiveTopHit(q, [partial])).toBe(true);
+  // 無関係な最上位ヒット（内容語をほぼ含まない）→ cov < 0.34 → 非 substantive（昇格）。
+  const unrelated = hit("課題 の 進捗 と 対応 コスト の 話");
+  expect(queryCoverage(q, unrelated.text)).toBeLessThan(0.34);
+  expect(isSubstantiveTopHit(q, [unrelated])).toBe(false);
+});
+
 test("isSubstantiveTopHit は単一内容語クエリで一致時 true（従来どおり非昇格・非回帰）", () => {
   // 分母1の単一内容語は一致で 1.0＝substantive → startHard は従来どおり発火しない。
   expect(isSubstantiveTopHit("トークナイザ", [hit("全文検索 の トークナイザ は unicode61")])).toBe(true);
