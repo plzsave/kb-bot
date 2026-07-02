@@ -248,10 +248,69 @@ function scorecard(overrides: Partial<Scorecard>): Scorecard {
   return {
     perAxis: [],
     gate: { failed: [], total: 0 },
+    monitor: { pass: 0, total: 0, failed: [] },
     total: { pass: 0, evaluated: 0, skipped: 0 },
     ...overrides,
   };
 }
+
+// --- monitor（非ゲート・情報表示）分類（eval-monitor-cases） ---
+
+test("validateCases は monitor が真偽値なら許容し、非真偽値なら報告する", () => {
+  expect(validateCases([rawCase({ name: "m1", monitor: true }), rawCase({ name: "m2", monitor: false })])).toEqual([]);
+  const errors = validateCases([rawCase({ name: "bad", monitor: "yes" as unknown as boolean })]);
+  expect(errors.length).toBeGreaterThan(0);
+  expect(errors.some((e) => e.includes("bad") && e.includes("monitor"))).toBe(true);
+});
+
+test("buildScorecard は monitor ケースを別 tally に入れ、total/gate/perAxis を汚さない", () => {
+  const results: CaseResult[] = [
+    caseResult({ name: "s1", axis: "A", status: "PASS" }), // scored
+    caseResult({ name: "m1", axis: "D", monitor: true, status: "FAIL", fails: ["x"] }), // monitor FAIL
+    caseResult({ name: "m2", axis: "B", monitor: true, status: "PASS" }), // monitor PASS
+  ];
+  const sc = buildScorecard(results);
+  // total（exit 母数）は scored のみ。monitor は含めない。
+  expect(sc.total).toEqual({ pass: 1, evaluated: 1, skipped: 0 });
+  // perAxis も scored のみ（D/B の monitor は出さない）。
+  expect(sc.perAxis.map((t) => t.axis)).toEqual(["A"]);
+  // monitor tally に PASS/FAIL が入る。
+  expect(sc.monitor).toEqual({ pass: 1, total: 2, failed: ["m1"] });
+});
+
+test("overallPassed は monitor FAIL があっても gate/scored 全 PASS なら true", () => {
+  const results: CaseResult[] = [
+    caseResult({ name: "s1", status: "PASS" }),
+    caseResult({ name: "m1", monitor: true, status: "FAIL", fails: ["x"] }),
+  ];
+  expect(overallPassed(buildScorecard(results))).toBe(true);
+});
+
+test("formatScorecard は monitor 行を pass/total と FAIL 名付きで出す（total>0 時のみ）", () => {
+  const withMon = formatScorecard(scorecard({ monitor: { pass: 1, total: 2, failed: ["mFail"] }, total: { pass: 1, evaluated: 1, skipped: 0 } }));
+  expect(withMon).toContain("モニタ（非ゲート）");
+  expect(withMon).toContain("1/2");
+  expect(withMon).toContain("mFail");
+  // monitor が無ければ行は出ない（既存表示の後方互換）。
+  expect(formatScorecard(scorecard({ total: { pass: 1, evaluated: 1, skipped: 0 } }))).not.toContain("モニタ");
+});
+
+test("eval/cases.json は soft テキストケース（次の一歩・出典主目的）を monitor:true にしている（構造ガード）", () => {
+  const cases = JSON.parse(
+    readFileSync(new URL("../eval/cases.json", import.meta.url), "utf8"),
+  ) as (RawCase & { fixtures?: string[] })[];
+  const hasFixtures = (c: RawCase & { fixtures?: string[] }) => Array.isArray(c.fixtures) && c.fixtures.length > 0;
+  // D（offersNextStep）が monitor:true。
+  const dMon = cases.filter((c) => c.axis === "D" && c.expect.offersNextStep === true && c.monitor === true);
+  expect(dMon.length).toBeGreaterThanOrEqual(1);
+  // 出典主目的（citesSource かつ fixtures なし＝ドリフトでない）の B′ ケースはすべて monitor:true。
+  const citePrimary = cases.filter((c) => c.expect.citesSource === true && !hasFixtures(c));
+  expect(citePrimary.length).toBeGreaterThanOrEqual(2);
+  expect(citePrimary.every((c) => c.monitor === true)).toBe(true);
+  // ドリフト（citesSource かつ fixtures あり＝correctness 主目的）は monitor にせず scored のまま（Req 3.3）。
+  const drift = cases.filter((c) => c.expect.citesSource === true && hasFixtures(c));
+  expect(drift.every((c) => c.monitor !== true)).toBe(true);
+});
 
 test("overallPassed は評価済み全 PASS かつゲート失敗なしで true", () => {
   const sc = scorecard({

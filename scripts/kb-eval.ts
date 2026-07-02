@@ -129,6 +129,7 @@ export interface RawCase {
   expect: Expect;
   axis?: string; // 未検証。validateCases 通過後に Axis へ narrow
   gate?: unknown; // 未検証。boolean 以外は不正
+  monitor?: unknown; // 未検証。boolean 以外は不正（非ゲート＝exit 母数外の情報表示ケース）
   fixtures?: unknown; // 未検証。文字列配列以外は不正（隔離索引に載せる eval 専用 doc 名）
 }
 
@@ -139,6 +140,7 @@ interface Case {
   expect: Expect;
   axis?: Axis; // 省略時は無タグ（総合のみに数える）
   gate?: boolean; // 省略時は false
+  monitor?: boolean; // 省略時は false。true=非ゲート（実行・採点・表示するが exit 母数から除外）
   fixtures?: string[]; // 省略時は本番 db を使用（従来挙動）。非空なら隔離索引に切り替える（buildFixtureDb が消費）
 }
 
@@ -228,6 +230,10 @@ export function validateCases(cases: RawCase[]): string[] {
     if (c.gate !== undefined && typeof c.gate !== "boolean") {
       errors.push(`ケース "${c.name}": gate は真偽値である必要があります（受領: ${JSON.stringify(c.gate)}）`);
     }
+    // monitor は省略時 false 扱い。指定された場合は真偽値であること（gate と同型）。
+    if (c.monitor !== undefined && typeof c.monitor !== "boolean") {
+      errors.push(`ケース "${c.name}": monitor は真偽値である必要があります（受領: ${JSON.stringify(c.monitor)}）`);
+    }
     // fixtures は省略可。指定された場合は「文字列の配列」であること（防御的・最小、実在検査は実行ループ側）。
     if (
       c.fixtures !== undefined &&
@@ -247,6 +253,7 @@ export interface CaseResult {
   name: string;
   axis?: Axis; // 省略時は無タグ（総合のみに数える）
   gate: boolean; // ゲートケースか（省略時 false 相当）
+  monitor?: boolean; // 非ゲート（省略時 false）。true=exit 母数外の情報表示
   status: CaseStatus;
   fails: string[]; // FAIL の内訳（PASS/SKIP/ERROR は空でよい）
 }
@@ -262,6 +269,7 @@ export interface AxisTally {
 export interface Scorecard {
   perAxis: AxisTally[]; // 出現した軸のみ・SKIP を除外して集計
   gate: { failed: string[]; total: number }; // 評価済みゲートのうち FAIL/ERROR の名前と母数
+  monitor: { pass: number; total: number; failed: string[] }; // 非ゲート（exit 対象外）・情報表示
   total: { pass: number; evaluated: number; skipped: number };
 }
 
@@ -278,6 +286,9 @@ export function buildScorecard(results: CaseResult[]): Scorecard {
   const tallyByAxis = new Map<Axis, AxisTally>();
   const gateFailed: string[] = [];
   let gateTotal = 0;
+  const monitorFailed: string[] = [];
+  let monitorPass = 0;
+  let monitorTotal = 0;
   let pass = 0;
   let evaluated = 0;
   let skipped = 0;
@@ -286,6 +297,15 @@ export function buildScorecard(results: CaseResult[]): Scorecard {
     // SKIP は軸別・ゲート・evaluated のいずれにも数えない（Req 5.2/5.3）。
     if (r.status === "SKIP") {
       skipped++;
+      continue;
+    }
+
+    // monitor（非ゲート）は別 tally にのみ計上し、evaluated/pass/perAxis/gate のいずれにも数えない。
+    // これで overallPassed（total と gate だけを見る）は monitor を自動的に無視する（非ゲート化）。
+    if (r.monitor) {
+      monitorTotal++;
+      if (r.status === "PASS") monitorPass++;
+      else monitorFailed.push(r.name);
       continue;
     }
 
@@ -321,6 +341,7 @@ export function buildScorecard(results: CaseResult[]): Scorecard {
   return {
     perAxis,
     gate: { failed: gateFailed, total: gateTotal },
+    monitor: { pass: monitorPass, total: monitorTotal, failed: monitorFailed },
     total: { pass, evaluated, skipped },
   };
 }
@@ -364,7 +385,13 @@ export function formatScorecard(sc: Scorecard): string {
     lines.push(`  ゲート: FAIL ${sc.gate.failed.length} 件（${sc.gate.failed.join(", ")}）/ 母数 ${sc.gate.total}`);
   }
 
-  // 総合行: 評価済み基準で明示（例 `総合 5/5 PASS, 2 SKIP`）。既存の総合 PASS 数を保持。
+  // モニタ行（非ゲート・情報表示）: exit を左右しないが傾向として並走表示する。
+  if (sc.monitor.total > 0) {
+    const tail = sc.monitor.failed.length > 0 ? `（FAIL: ${sc.monitor.failed.join(", ")}）` : "";
+    lines.push(`  モニタ（非ゲート）: ${sc.monitor.pass}/${sc.monitor.total} PASS${tail}`);
+  }
+
+  // 総合行: 評価済み基準で明示（例 `総合 5/5 PASS, 2 SKIP`）。既存の総合 PASS 数を保持（monitor は含めない）。
   lines.push(`  総合 ${sc.total.pass}/${sc.total.evaluated} PASS, ${sc.total.skipped} SKIP`);
 
   return lines.join("\n");
@@ -443,6 +470,8 @@ async function main() {
 
   for (const c of cases) {
     const gate = c.gate ?? false;
+    const monitor = c.monitor ?? false;
+    const tag = monitor ? " (monitor)" : "";
     // GitHub ツールを期待するケースは GitHub 未設定ならスキップ（誤った FAIL を避ける）。
     const needsGh =
       c.expect.source === "code" ||
@@ -451,8 +480,8 @@ async function main() {
       (c.expect.toolsUsedAll ?? []).some((t) => GH_TOOLS.has(t)) ||
       !!c.expect.readPathIncludes;
     if (needsGh && !github) {
-      console.log(`${statusLabel("SKIP", gate)}  ${c.name} … GitHub 未設定（KB_GITHUB_REPOS）`);
-      results.push({ name: c.name, axis: c.axis, gate, status: "SKIP", fails: [] });
+      console.log(`${statusLabel("SKIP", gate)}  ${c.name}${tag} … GitHub 未設定（KB_GITHUB_REPOS）`);
+      results.push({ name: c.name, axis: c.axis, gate, monitor, status: "SKIP", fails: [] });
       continue;
     }
 
@@ -490,13 +519,13 @@ async function main() {
         const trace = calls.map((c) => c.name).join(" → ") || "（ツール未使用）";
         const tier = escalated ? `↑${modelUsed}` : modelUsed;
         const status: CaseStatus = fails.length === 0 ? "PASS" : "FAIL";
-        console.log(`${statusLabel(status, gate)}  ${c.name}  [${tier}] [${trace}]`);
+        console.log(`${statusLabel(status, gate)}  ${c.name}${tag}  [${tier}] [${trace}]`);
         for (const f of fails) console.log(`        - ${f}`);
-        results.push({ name: c.name, axis: c.axis, gate, status, fails });
+        results.push({ name: c.name, axis: c.axis, gate, monitor, status, fails });
       } catch (e) {
         const message = (e as Error).message;
-        console.log(`${statusLabel("ERROR", gate)} ${c.name}: ${message}`);
-        results.push({ name: c.name, axis: c.axis, gate, status: "ERROR", fails: [message] });
+        console.log(`${statusLabel("ERROR", gate)} ${c.name}${tag}: ${message}`);
+        results.push({ name: c.name, axis: c.axis, gate, monitor, status: "ERROR", fails: [message] });
       }
     } finally {
       // 隔離索引はケース終了時に確実に破棄する。本番共有 db は他ケースが使うため閉じない（Error Handling）。
