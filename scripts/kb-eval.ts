@@ -646,7 +646,10 @@ async function main() {
 
   // 集約ゲート: baseline（ケース定義と同じディレクトリの baseline.json）と比較する。
   // band/minN は環境変数で較正可能（band はライブ 2 run の実測分散から決める）。
-  const band = Number(process.env.KB_EVAL_BAND) > 0 ? Number(process.env.KB_EVAL_BAND) : 0.08;
+  // band 既定 0.10 は実測較正値: 60 ケースのライブ 2 run で per-case flip 10/60（17%）・
+  // 合格率差 6.7pp を観測（2026-07-02）。10pp はその ~1.5 倍＝ノイズでの偽アラームを抑えつつ
+  // 10pp 超の全体劣化（例: コード検索ツールの全損 ≈ -18pp）は捕まえる水準。
+  const band = Number(process.env.KB_EVAL_BAND) > 0 ? Number(process.env.KB_EVAL_BAND) : 0.1;
   const minN = Number(process.env.KB_EVAL_MIN_N) > 0 ? Number(process.env.KB_EVAL_MIN_N) : 30;
   const baselinePath = join(dirname(casesPath), "baseline.json");
   let baseline: Baseline | null = null;
