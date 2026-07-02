@@ -49,6 +49,14 @@ test("buildSystem: GitHub 無効時は『コード確認の必須化』を出さ
   expect(s).not.toContain("search_repo_code");
 });
 
+test("buildSystem: Slack/Discord で崩れる markdown 表を使わない指示が入る", () => {
+  const s = buildSystem();
+  expect(s).toContain("Markdown tables");
+  expect(s).toContain("bullet");
+  // 既存の [Output style] 文言は保持。
+  expect(s).toContain("conclusion first");
+});
+
 test("buildSystem: コード確認追記後も [Safety]/[Output style]/#31 next-step/言語自動判別を保持する（Req 1.5）", () => {
   const gh = { repos: ["o/r1"] } as unknown as GitHub;
   const s = buildSystem(gh);
