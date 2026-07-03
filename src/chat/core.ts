@@ -36,7 +36,7 @@ export function buildSystem(gh?: GitHub, extra?: string): string {
   const withGh = !gh
     ? base
     : base +
-      `\n\n[Important] For questions about the app's spec, behavior, or usage, the docs may be stale, so treat the ACTUAL CODE as the source of truth. Repositories you may reference: ${gh.repos.join(", ")}. Use list_repo_tree to grasp the structure, search_repo_code to find the relevant spot, and read_repo_file to read the real code, then cite file paths and line numbers as evidence. If the docs and the code disagree, prefer the code.\n- [Check the code before giving up] For questions about implementation, behavior, spec, or cost, do NOT declare that you could not find the fact until you have actually consulted the code: search it with search_repo_code and read the relevant file with read_repo_file. Only say you "could not find it" once it is absent from BOTH the docs and the code — a docs miss alone is not enough to give up.\n- [Monorepo] A repo may be large (a monorepo with many packages). list_repo_tree then returns an overview (top-level dirs + the location of package manifests like package.json) instead of every file. Use it to identify the right package first, then drill in with the subdir argument (e.g. subdir="packages/foo"). When search_repo_code matches are scattered across packages, narrow with its path argument (e.g. path="packages/foo") so you find the right one instead of unrelated hits.`;
+      `\n\n[Important] For questions about the app's spec, behavior, or usage, the docs may be stale, so treat the ACTUAL CODE as the source of truth. Repositories you may reference: ${gh.repos.join(", ")}. Use list_repo_tree to grasp the structure, search_repo_code to find the relevant spot, and read_repo_file to read the real code, then cite file paths and line numbers as evidence. If the docs and the code disagree, prefer the code.\n- [Check the code before giving up] For questions about implementation, behavior, spec, or cost, do NOT declare that you could not find the fact until you have actually consulted the code: search it with search_repo_code and read the relevant file with read_repo_file. Only say you "could not find it" once it is absent from BOTH the docs and the code — a docs miss alone is not enough to give up.\n- [Verify docs against code before answering] The same applies when the docs DO seem to answer: for questions about implementation, behavior, spec, or concrete configured values (limits, defaults, TTLs, sizes, tokenizers), do NOT answer from the docs or the initial context alone, even when they state an answer confidently — docs tend to be stale precisely there. First confirm the claim in the actual code (search_repo_code, then read_repo_file), answer from what the code says, and cite the file path and line number. Docs-only answers are fine only for human procedures, operations, and rules that have no counterpart in code.\n- [Monorepo] A repo may be large (a monorepo with many packages). list_repo_tree then returns an overview (top-level dirs + the location of package manifests like package.json) instead of every file. Use it to identify the right package first, then drill in with the subdir argument (e.g. subdir="packages/foo"). When search_repo_code matches are scattered across packages, narrow with its path argument (e.g. path="packages/foo") so you find the right one instead of unrelated hits.`;
   const add = extra?.trim();
   if (!add) return withGh;
   return (
@@ -47,6 +47,21 @@ export function buildSystem(gh?: GitHub, extra?: string): string {
 
 // 後方互換のための既定 system（GitHub 無効・追加指示なし）。
 export const SYSTEM = buildSystem();
+
+// 初期コンテキスト（FTS 上位）＋質問を 1 つのユーザーメッセージに組み立てる。本番（answer）と
+// kb-eval が同じ関数を使い「eval が本番を代表する」を構造的に保証する。
+// GitHub 有効時は裏取りリマインダを質問の後ろ（モデルが最後に読む位置）に置く。system の
+// [Verify docs against code before answering] と同旨だが、実測では system 内の指示だけでは
+// 無視され（drift プローブ 2026-07-03: system のみ=0/6）、ユーザーメッセージ内の指示は安定して
+// 効いた（質問内誘導=6/6）ため、ここに重ねて置く。
+export function buildInitialPrompt(hits: ReturnType<typeof search>, question: string, withGh: boolean): string {
+  const head = `# 初期コンテキスト（FTS検索の上位${hits.length}件）\n\n${formatHits(hits)}\n\n# 質問\n${question}`;
+  if (!withGh) return head;
+  return (
+    head +
+    `\n\n# Before answering (mandatory)\nIf this question concerns the app's implementation, behavior, spec, or a configured value (limit, default, TTL, size, tokenizer, etc.), do NOT answer from the docs above alone — even if they state an answer confidently; docs can be stale. Verify in the actual code first: usually ONE search_repo_code plus ONE read_repo_file on the best hit is enough. As soon as the code answers the question, STOP searching and answer from what the code says, citing the file path and line number (path:line). If the docs and the code disagree, the code wins. Questions about human procedures, operations, and rules with no counterpart in code may be answered from the docs alone.`
+  );
+}
 
 /** 1 回の発言（メッセージ）に対する返信ハンドル。send で起票し、返る handle を update で書き換える。 */
 export interface ReplyHandle {
@@ -132,7 +147,7 @@ export async function answer(
   // ② FTS5/BM25 で関連チャンクを取得し初期コンテキストに前置き（埋め込み課金ゼロ）
   const hits = search(db, q, TOP_K);
   logUsage(db, hits.map((h) => h.docKey)); // 検索ヒットを retrieved として記録（kb-prune 用）
-  const initialPrompt = `# 初期コンテキスト（FTS検索の上位${hits.length}件）\n\n${formatHits(hits)}\n\n# 質問\n${q}`;
+  const initialPrompt = buildInitialPrompt(hits, q, !!github);
 
   // ③ エージェント実行（既定は最安ティア・プロンプトキャッシュ・tool use）。逐次更新。
   // GitHub が有効ならコード参照ツールを足す（実コードで仕様を語る）。

@@ -17,9 +17,9 @@ import { chunkMarkdown } from "../src/kb/chunk.ts";
 import { loadGitHub } from "../src/github.ts";
 import { type AgentTool } from "../src/agent/agent.ts";
 import { runWithEscalation } from "../src/agent/escalation.ts";
-import { searchKnowledgeTool, formatHits } from "../src/agent/tools.ts";
+import { searchKnowledgeTool } from "../src/agent/tools.ts";
 import { githubTools } from "../src/agent/githubTools.ts";
-import { buildSystem } from "../src/chat/core.ts";
+import { buildSystem, buildInitialPrompt } from "../src/chat/core.ts";
 import type { LlmMessage } from "../src/llm/provider.ts";
 
 const TOP_K = 5; // 本番（core.ts）と同じく初期コンテキストに前置きする FTS 件数
@@ -608,7 +608,7 @@ async function main() {
 
       // 本番と同じ初期コンテキスト（FTS 上位）＋system を組み立てる。fixtures ありなら stale doc が前置きされる。
       const hits = search(caseDb, c.question, TOP_K);
-      const initialPrompt = `# 初期コンテキスト（FTS検索の上位${hits.length}件）\n\n${formatHits(hits)}\n\n# 質問\n${c.question}`;
+      const initialPrompt = buildInitialPrompt(hits, c.question, !!github);
       const messages: LlmMessage[] = [{ role: "user", content: initialPrompt }];
 
       try {
