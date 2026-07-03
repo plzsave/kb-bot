@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { buildSystem } from "../src/chat/core.ts";
+import { buildSystem, buildInitialPrompt } from "../src/chat/core.ts";
 import { createSystemExtraResolver } from "../src/chat/systemExtra.ts";
 import type { S3Client } from "../src/s3.ts";
 import type { GitHub } from "../src/github.ts";
@@ -47,6 +47,39 @@ test("buildSystem: GitHub 無効時は『コード確認の必須化』を出さ
   const s = buildSystem(); // GitHub なし
   expect(s).not.toContain("before giving up");
   expect(s).not.toContain("search_repo_code");
+});
+
+test("buildSystem: GitHub 有効時は『docs が答えていても回答前にコードで裏取り』を必須化する（drift 主因対策）", () => {
+  const gh = { repos: ["o/r1"] } as unknown as GitHub;
+  const s = buildSystem(gh);
+  // docs が自信満々に答えていても、挙動/仕様/設定値の質問はコード裏取りしてから答える。
+  expect(s).toContain("[Verify docs against code before answering]");
+  expect(s).toContain("even when they state an answer confidently");
+  // docs だけで答えてよいのはコードに対応物が無い人間の手順・規則のみ。
+  expect(s).toContain("no counterpart in code");
+});
+
+test("buildSystem: GitHub 無効時は『裏取り必須化』を出さない", () => {
+  const s = buildSystem(); // GitHub なし
+  expect(s).not.toContain("[Verify docs against code before answering]");
+});
+
+test("buildInitialPrompt: GitHub 有効時は質問の後ろに裏取りリマインダを置く（drift 主因対策の実効部）", () => {
+  const p = buildInitialPrompt([], "TTL は？", true);
+  expect(p).toContain("# 質問\nTTL は？");
+  // 質問より後（モデルが最後に読む位置）に来ること。system 内の指示だけでは効かなかった実測に基づく。
+  const qi = p.indexOf("# 質問");
+  const vi = p.indexOf("# Before answering");
+  expect(vi).toBeGreaterThan(qi);
+  expect(p).toContain("even if they state an answer confidently");
+  expect(p).toContain("search_repo_code");
+});
+
+test("buildInitialPrompt: GitHub 無効時はリマインダを出さない（コードツールが無いので指示しない）", () => {
+  const p = buildInitialPrompt([], "TTL は？", false);
+  expect(p).toContain("# 質問\nTTL は？");
+  expect(p).not.toContain("# Before answering");
+  expect(p).not.toContain("search_repo_code");
 });
 
 test("buildSystem: Slack/Discord で崩れる markdown 表を使わない指示が入る", () => {
