@@ -567,7 +567,7 @@ async function main() {
 
   const { provider, model, modelHard } = createLlm();
   const db = openDb(dbPath());
-  const github = loadGitHub();
+  const github = loadGitHub(db);
   console.log(
     `eval: provider=${provider.name} model=${model} modelHard=${modelHard ?? "-"} github=${github ? github.repos.join(",") : "off"} / ${cases.length} ケース\n`,
   );

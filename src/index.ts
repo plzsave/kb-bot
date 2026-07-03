@@ -34,7 +34,7 @@ const cfg = loadBotConfig();
 const db = openDb(dbPath());
 ensureCacheTable(db);
 ensureUsageTable(db);
-const github = loadGitHub();
+const github = loadGitHub(db);
 const deps: AnswerDeps = {
   db,
   provider: cfg.provider,
