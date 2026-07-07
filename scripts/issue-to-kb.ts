@@ -78,7 +78,7 @@ for (const repo of cfg.repos) {
   if (budget <= 0) break;
   const since = args.since ?? cursorFor(state[repo]);
   console.log(`\n=== ${repo} ===（since=${since ?? "全件"}）`);
-  const issues = await listClosedIssues(repo, cfg.githubToken, { since, log: (m) => console.log(m) });
+  const issues = await listClosedIssues(repo, await cfg.githubAuth?.(), { since, log: (m) => console.log(m) });
   console.log(`closed issue: ${issues.length} 件`);
   state[repo] ??= {};
 
@@ -101,7 +101,7 @@ for (const repo of cfg.repos) {
 
     budget--;
     try {
-      const comments = await fetchComments(repo, issue.number, cfg.githubToken, (m) => console.log(m));
+      const comments = await fetchComments(repo, issue.number, await cfg.githubAuth?.(), (m) => console.log(m));
       const prompt = buildUserPrompt({ issue, comments });
       const text = await cfg.provider.complete({
         model,

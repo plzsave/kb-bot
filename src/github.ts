@@ -3,6 +3,7 @@
 // 参照リポの allowlist を足した。ドキュメントは陳腐化しうるので「真実はコード」を支える土台。
 
 import type { Database } from "bun:sqlite";
+import { loadGitHubTokenSource, type TokenSource } from "./github-app-auth.ts";
 
 const API = "https://api.github.com";
 const MAX_FILE = 32 * 1024; // 1 ファイル 32KB 上限（tool_result 肥大＝トークン爆発を防ぐ）
@@ -286,7 +287,7 @@ function withLineNumbers(text: string, from: number): string {
 // blob API を使う＝トークンでプライベートリポも読める）。候補順を保った {path, content} を返す。
 // 取得失敗・非base64はスキップ（部分結果でも grep する＝空振りより有用）。副作用はネットワークのみ。
 async function fetchTextBlobs(
-  token: string | undefined,
+  auth: TokenSource | undefined,
   repo: string,
   items: { path: string; sha: string }[],
   concurrency = GREP_CONCURRENCY,
@@ -312,7 +313,7 @@ async function fetchTextBlobs(
       const it = misses[next++]!;
       if (rateLimited) return; // 制限検知後は残りを無駄撃ちしない
       try {
-        const res = await fetch(`${API}/repos/${repo}/git/blobs/${it.sha}`, { headers: headers(token) });
+        const res = await fetch(`${API}/repos/${repo}/git/blobs/${it.sha}`, { headers: headers(await auth?.()) });
         if (!res.ok) {
           // レート制限は「取れなかった」と区別して記録する（黙殺すると 0 件に見えスパイラルの原因になる）。
           if (isRateLimitResponse(res.status, res.headers)) rateLimited = true;
@@ -337,7 +338,7 @@ async function fetchTextBlobs(
   };
 }
 
-export function createGitHub(token: string | undefined, repos: string[], blobDb?: Database): GitHub {
+export function createGitHub(auth: TokenSource | undefined, repos: string[], blobDb?: Database): GitHub {
   if (blobDb) ensureBlobCache(blobDb);
   const allow = new Set(repos.map((r) => r.toLowerCase()));
 
@@ -358,12 +359,12 @@ export function createGitHub(token: string | undefined, repos: string[], blobDb?
 
     async listTree(repo, subdir) {
       try {
-        const metaRes = await fetch(`${API}/repos/${repo}`, { headers: headers(token) });
+        const metaRes = await fetch(`${API}/repos/${repo}`, { headers: headers(await auth?.()) });
         if (!metaRes.ok) return httpFailNote(`${repo} のメタ取得`, metaRes);
         const meta = (await metaRes.json()) as { default_branch?: string };
         const branch = meta.default_branch ?? "main";
         const res = await fetch(`${API}/repos/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`, {
-          headers: headers(token),
+          headers: headers(await auth?.()),
         });
         if (!res.ok) return httpFailNote(`${repo} のツリー取得`, res);
         const j = (await res.json()) as { tree?: { path?: string; type?: string }[]; truncated?: boolean };
@@ -383,7 +384,7 @@ export function createGitHub(token: string | undefined, repos: string[], blobDb?
       if (reason) return `（ファイル取得拒否: ${reason}）`;
       try {
         const url = `${API}/repos/${repo}/contents/${encodeURIComponent(path).replace(/%2F/g, "/")}`;
-        const res = await fetch(url, { headers: headers(token) });
+        const res = await fetch(url, { headers: headers(await auth?.()) });
         if (!res.ok) return httpFailNote(`${repo} の ${path} 取得`, res);
         const j = (await res.json()) as { content?: string; encoding?: string; type?: string };
         if (j.type !== "file" || j.content == null || j.encoding !== "base64") {
@@ -420,11 +421,11 @@ export function createGitHub(token: string | undefined, repos: string[], blobDb?
       const terms = searchTerms(query);
       if (terms.length === 0) return "（検索語が空でした）";
       try {
-        const metaRes = await fetch(`${API}/repos/${repo}`, { headers: headers(token) });
+        const metaRes = await fetch(`${API}/repos/${repo}`, { headers: headers(await auth?.()) });
         if (!metaRes.ok) return httpFailNote(`${repo} のメタ取得`, metaRes);
         const branch = ((await metaRes.json()) as { default_branch?: string }).default_branch ?? "main";
         const treeRes = await fetch(`${API}/repos/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`, {
-          headers: headers(token),
+          headers: headers(await auth?.()),
         });
         if (!treeRes.ok) return httpFailNote(`${repo} のツリー取得`, treeRes);
         const tree = (await treeRes.json()) as {
@@ -451,7 +452,7 @@ export function createGitHub(token: string | undefined, repos: string[], blobDb?
         );
         const shaByPath = new Map(blobs.map((b) => [b.path, b.sha]));
         const items = candidatePaths.map((p) => ({ path: p, sha: shaByPath.get(p)! }));
-        const { files, rateLimited } = await fetchTextBlobs(token, repo, items, GREP_CONCURRENCY, blobDb);
+        const { files, rateLimited } = await fetchTextBlobs(auth, repo, items, GREP_CONCURRENCY, blobDb);
 
         const { matches, broadened } = grepFiles(files, terms, { maxTotal: SEARCH_RESULTS });
         const scopeNote = path ? `（path:${path}）` : "";
@@ -502,5 +503,5 @@ export function loadGitHub(blobDb?: Database): GitHub | undefined {
     .map((r) => r.trim())
     .filter(Boolean);
   if (repos.length === 0) return undefined;
-  return createGitHub(process.env.GITHUB_TOKEN?.trim() || undefined, repos, blobDb);
+  return createGitHub(loadGitHubTokenSource(), repos, blobDb);
 }

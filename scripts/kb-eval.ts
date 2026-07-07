@@ -15,6 +15,7 @@ import { dbPath } from "../src/config.ts";
 import { openDb, replaceDoc, search } from "../src/kb/db.ts";
 import { chunkMarkdown } from "../src/kb/chunk.ts";
 import { loadGitHub } from "../src/github.ts";
+import { loadGitHubTokenSource } from "../src/github-app-auth.ts";
 import { type AgentTool } from "../src/agent/agent.ts";
 import { runWithEscalation } from "../src/agent/escalation.ts";
 import { searchKnowledgeTool } from "../src/agent/tools.ts";
@@ -599,7 +600,7 @@ async function main() {
   // レート残量ガード: 枯渇状態で走らせると検索が静かに崩れスコアがノイズ化する（2026-07-03 に誤診の実害）。
   if (github) {
     try {
-      const token = process.env.GITHUB_TOKEN?.trim();
+      const token = await loadGitHubTokenSource()?.();
       const res = await fetch("https://api.github.com/rate_limit", {
         headers: token ? { authorization: `Bearer ${token}` } : {},
       });

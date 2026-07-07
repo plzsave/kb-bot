@@ -11,6 +11,9 @@ services:
     # 回答キャッシュを再起動後も残すため /app/data を永続化（FTS は起動時に再構築される派生物）。
     volumes:
       - kbdata:/app/data
+      # GitHub App 認証を使う場合は秘密鍵 PEM を read-only mount し、
+      # .env に GITHUB_APP_PRIVATE_KEY_PATH=/app/github-app.pem を設定する。
+      # - ./github-app.pem:/app/github-app.pem:ro
     restart: unless-stopped
 
 volumes:
