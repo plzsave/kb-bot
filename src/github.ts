@@ -2,6 +2,8 @@
 // mdcollab の src/github/client.ts を移植し、行範囲指定（トークン節約）と
 // 参照リポの allowlist を足した。ドキュメントは陳腐化しうるので「真実はコード」を支える土台。
 
+import type { Database } from "bun:sqlite";
+
 const API = "https://api.github.com";
 const MAX_FILE = 32 * 1024; // 1 ファイル 32KB 上限（tool_result 肥大＝トークン爆発を防ぐ）
 const MAX_TREE = 800; // ファイル一覧（小規模リポ/サブディレクトリ）の件数上限
@@ -187,6 +189,82 @@ export function rejectPath(path: string): string | null {
   return rejectSecret(p);
 }
 
+/** GitHub API のレート制限応答か（403/429 かつ remaining=0 または retry-after 付き）。純関数。 */
+export function isRateLimitResponse(status: number, hdrs: { get(name: string): string | null }): boolean {
+  if (status !== 403 && status !== 429) return false;
+  return hdrs.get("x-ratelimit-remaining") === "0" || hdrs.get("retry-after") != null;
+}
+
+// HTTP 失敗をモデル向けメモ文字列にする。レート制限は「見つからない」と区別して明示する
+// （黙って空を返すとモデルが語を変えて再検索スパイラルに入り、誤答と LLM 課金を生むため）。
+function httpFailNote(what: string, res: { status: number; headers: { get(name: string): string | null } }): string {
+  return isRateLimitResponse(res.status, res.headers)
+    ? `（GitHub API のレート制限中のため、${what}をいま実行できません。しばらく待ってから再度お試しください）`
+    : `（${what}に失敗: HTTP ${res.status}）`;
+}
+
+// ---- blob キャッシュ ----
+// blob は sha で内容アドレスされた不変オブジェクト（内容が変われば sha が変わる）。鮮度判定は毎回
+// ライブの tree（現在の sha 一覧）が行うため、このキャッシュは絶対に陳腐化しない＝TTL 不要。
+// 「コードは常に最新を読む」の約束を保ったまま、API 消費（レート制限）とレイテンシを桁で減らす。
+const BLOB_CACHE_MAX_BYTES = 64 * 1024 * 1024; // LRU 掃除の上限（MAX_GREP_BLOB=256KB × 数百件に余裕）
+
+export function ensureBlobCache(db: Database): void {
+  db.run(
+    `CREATE TABLE IF NOT EXISTS gh_blob_cache (
+      sha        TEXT PRIMARY KEY,
+      content    TEXT NOT NULL,
+      size       INTEGER NOT NULL,
+      last_used  INTEGER NOT NULL
+    )`,
+  );
+}
+
+/** キャッシュ済み blob を引く（ヒットは last_used を更新＝LRU）。 */
+export function cacheGetBlobs(db: Database, shas: string[], now = Date.now()): Map<string, string> {
+  const out = new Map<string, string>();
+  if (shas.length === 0) return out;
+  const get = db.prepare("SELECT content FROM gh_blob_cache WHERE sha = ?");
+  const touch = db.prepare("UPDATE gh_blob_cache SET last_used = ? WHERE sha = ?");
+  for (const sha of shas) {
+    const row = get.get(sha) as { content: string } | null;
+    if (row != null) {
+      out.set(sha, row.content);
+      touch.run(now, sha);
+    }
+  }
+  return out;
+}
+
+export function cachePutBlob(db: Database, sha: string, content: string, now = Date.now()): void {
+  db.prepare("INSERT OR REPLACE INTO gh_blob_cache (sha, content, size, last_used) VALUES (?, ?, ?, ?)").run(
+    sha,
+    content,
+    Buffer.byteLength(content, "utf8"),
+    now,
+  );
+}
+
+/** 合計サイズが上限を超えた分だけ、最後に使った時刻が古い順に削除する（LRU）。削除件数を返す。 */
+export function pruneBlobCache(db: Database, maxBytes = BLOB_CACHE_MAX_BYTES): number {
+  const total = (db.prepare("SELECT COALESCE(SUM(size), 0) AS t FROM gh_blob_cache").get() as { t: number }).t;
+  let over = total - maxBytes;
+  if (over <= 0) return 0;
+  const rows = db.prepare("SELECT sha, size FROM gh_blob_cache ORDER BY last_used ASC").all() as {
+    sha: string;
+    size: number;
+  }[];
+  const del = db.prepare("DELETE FROM gh_blob_cache WHERE sha = ?");
+  let n = 0;
+  for (const r of rows) {
+    if (over <= 0) break;
+    del.run(r.sha);
+    over -= r.size;
+    n++;
+  }
+  return n;
+}
+
 function decodeBase64(b64: string): string {
   return Buffer.from(b64.replace(/\n/g, ""), "base64").toString("utf8");
 }
@@ -206,29 +284,50 @@ async function fetchTextBlobs(
   repo: string,
   items: { path: string; sha: string }[],
   concurrency = GREP_CONCURRENCY,
-): Promise<{ path: string; content: string }[]> {
+  blobDb?: Database,
+): Promise<{ files: { path: string; content: string }[]; rateLimited: boolean }> {
   const byPath = new Map<string, string>();
+  // キャッシュで解決できる分はネットワークに行かない（sha は不変＝内容一致が保証される）。
+  const cached = blobDb ? cacheGetBlobs(blobDb, items.map((i) => i.sha)) : new Map<string, string>();
+  const misses = items.filter((it) => {
+    const hit = cached.get(it.sha);
+    if (hit != null) byPath.set(it.path, hit);
+    return hit == null;
+  });
+  let rateLimited = false;
   let next = 0;
   const worker = async () => {
-    while (next < items.length) {
-      const it = items[next++]!;
+    while (next < misses.length) {
+      const it = misses[next++]!;
+      if (rateLimited) return; // 制限検知後は残りを無駄撃ちしない
       try {
         const res = await fetch(`${API}/repos/${repo}/git/blobs/${it.sha}`, { headers: headers(token) });
-        if (!res.ok) continue;
+        if (!res.ok) {
+          // レート制限は「取れなかった」と区別して記録する（黙殺すると 0 件に見えスパイラルの原因になる）。
+          if (isRateLimitResponse(res.status, res.headers)) rateLimited = true;
+          continue;
+        }
         const j = (await res.json()) as { content?: string; encoding?: string };
         if (j.content == null || j.encoding !== "base64") continue;
-        byPath.set(it.path, decodeBase64(j.content));
+        const text = decodeBase64(j.content);
+        byPath.set(it.path, text);
+        if (blobDb) cachePutBlob(blobDb, it.sha, text);
       } catch {
         /* 個別失敗はスキップ（部分結果で grep） */
       }
     }
   };
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  await Promise.all(Array.from({ length: Math.min(concurrency, misses.length) }, worker));
+  if (blobDb && misses.length > 0) pruneBlobCache(blobDb);
   // 候補順（selectSearchCandidates の並び）を保って返す。並列取得の完了順に依存しない＝決定的。
-  return items.filter((it) => byPath.has(it.path)).map((it) => ({ path: it.path, content: byPath.get(it.path)! }));
+  return {
+    files: items.filter((it) => byPath.has(it.path)).map((it) => ({ path: it.path, content: byPath.get(it.path)! })),
+    rateLimited,
+  };
 }
 
-export function createGitHub(token: string | undefined, repos: string[]): GitHub {
+export function createGitHub(token: string | undefined, repos: string[], blobDb?: Database): GitHub {
+  if (blobDb) ensureBlobCache(blobDb);
   const allow = new Set(repos.map((r) => r.toLowerCase()));
 
   return {
@@ -249,13 +348,13 @@ export function createGitHub(token: string | undefined, repos: string[]): GitHub
     async listTree(repo, subdir) {
       try {
         const metaRes = await fetch(`${API}/repos/${repo}`, { headers: headers(token) });
-        if (!metaRes.ok) return `（${repo} のメタ取得に失敗: HTTP ${metaRes.status}）`;
+        if (!metaRes.ok) return httpFailNote(`${repo} のメタ取得`, metaRes);
         const meta = (await metaRes.json()) as { default_branch?: string };
         const branch = meta.default_branch ?? "main";
         const res = await fetch(`${API}/repos/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`, {
           headers: headers(token),
         });
-        if (!res.ok) return `（${repo} のツリー取得に失敗: HTTP ${res.status}）`;
+        if (!res.ok) return httpFailNote(`${repo} のツリー取得`, res);
         const j = (await res.json()) as { tree?: { path?: string; type?: string }[]; truncated?: boolean };
         const paths = (j.tree ?? []).filter((t) => t.type === "blob" && t.path).map((t) => t.path as string);
         if (paths.length === 0) return `（${repo} にファイルが見つかりません）`;
@@ -274,7 +373,7 @@ export function createGitHub(token: string | undefined, repos: string[]): GitHub
       try {
         const url = `${API}/repos/${repo}/contents/${encodeURIComponent(path).replace(/%2F/g, "/")}`;
         const res = await fetch(url, { headers: headers(token) });
-        if (!res.ok) return `（${repo} の ${path} 取得に失敗: HTTP ${res.status}）`;
+        if (!res.ok) return httpFailNote(`${repo} の ${path} 取得`, res);
         const j = (await res.json()) as { content?: string; encoding?: string; type?: string };
         if (j.type !== "file" || j.content == null || j.encoding !== "base64") {
           return `（${repo} の ${path} はテキストファイルとして取得できません）`;
@@ -307,12 +406,12 @@ export function createGitHub(token: string | undefined, repos: string[]): GitHub
       if (terms.length === 0) return "（検索語が空でした）";
       try {
         const metaRes = await fetch(`${API}/repos/${repo}`, { headers: headers(token) });
-        if (!metaRes.ok) return `（${repo} のメタ取得に失敗: HTTP ${metaRes.status}）`;
+        if (!metaRes.ok) return httpFailNote(`${repo} のメタ取得`, metaRes);
         const branch = ((await metaRes.json()) as { default_branch?: string }).default_branch ?? "main";
         const treeRes = await fetch(`${API}/repos/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`, {
           headers: headers(token),
         });
-        if (!treeRes.ok) return `（${repo} のツリー取得に失敗: HTTP ${treeRes.status}）`;
+        if (!treeRes.ok) return httpFailNote(`${repo} のツリー取得`, treeRes);
         const tree = (await treeRes.json()) as {
           tree?: { path?: string; type?: string; sha?: string; size?: number }[];
           truncated?: boolean;
@@ -337,19 +436,24 @@ export function createGitHub(token: string | undefined, repos: string[]): GitHub
         );
         const shaByPath = new Map(blobs.map((b) => [b.path, b.sha]));
         const items = candidatePaths.map((p) => ({ path: p, sha: shaByPath.get(p)! }));
-        const files = await fetchTextBlobs(token, repo, items);
+        const { files, rateLimited } = await fetchTextBlobs(token, repo, items, GREP_CONCURRENCY, blobDb);
 
         const { matches, broadened } = grepFiles(files, terms, { maxTotal: SEARCH_RESULTS });
         const scopeNote = path ? `（path:${path}）` : "";
         if (matches.length === 0) {
+          // レート制限で未走査なら「見つからない」と言わない（誤った不在宣言→再検索スパイラルを防ぐ）。
+          if (rateLimited) {
+            return `（GitHub API のレート制限中のため、${repo} のコード検索をいま完了できません。しばらく待ってから再度お試しください）`;
+          }
           return `（"${query}"${scopeNote} に一致する行は見つかりませんでした。list_repo_tree で構成を確認し read_repo_file で読むこともできます）`;
         }
         const lines = matches.map((m) => `${m.path}:${m.line}: ${m.text}`).join("\n");
         const head = broadened
           ? `一致（いずれかの語・厳密一致なし。read_repo_file で確認）:`
           : `一致した箇所（read_repo_file で該当ファイルを読む）:`;
+        const rateNote = rateLimited ? "\n（注: GitHub API レート制限で一部ファイル未走査。結果は不完全な可能性）" : "";
         const truncNote = tree.truncated ? "\n（注: ツリーが GitHub 側で切り詰め。一部ファイル未走査の可能性）" : "";
-        return `${head}\n${lines}${truncNote}`;
+        return `${head}\n${lines}${rateNote}${truncNote}`;
       } catch (e) {
         return `（${repo} のコード検索でエラー: ${e instanceof Error ? e.message : "unknown"}）`;
       }
@@ -379,7 +483,7 @@ export async function repoFileExists(
 }
 
 /** 環境変数から GitHub を構成。KB_GITHUB_REPOS 未設定なら undefined（機能オフ）。 */
-export function loadGitHub(): GitHub | undefined {
+export function loadGitHub(blobDb?: Database): GitHub | undefined {
   const reposRaw = process.env.KB_GITHUB_REPOS?.trim();
   if (!reposRaw) return undefined;
   const repos = reposRaw
@@ -387,5 +491,5 @@ export function loadGitHub(): GitHub | undefined {
     .map((r) => r.trim())
     .filter(Boolean);
   if (repos.length === 0) return undefined;
-  return createGitHub(process.env.GITHUB_TOKEN?.trim() || undefined, repos);
+  return createGitHub(process.env.GITHUB_TOKEN?.trim() || undefined, repos, blobDb);
 }
