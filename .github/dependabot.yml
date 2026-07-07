@@ -1,7 +1,9 @@
 version: 2
 updates:
-  # npm エコシステム（package.json / bun.lock の依存）
-  - package-ecosystem: npm
+  # bun エコシステム（package.json / bun.lock の依存）。
+  # npm だと package.json しか書き換えられず bun.lock が凍結のまま
+  # ＝CI/Docker の `bun install --frozen-lockfile` が必ず落ちるため bun を使う。
+  - package-ecosystem: bun
     directory: "/"
     schedule:
       interval: weekly
