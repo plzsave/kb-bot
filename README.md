@@ -100,7 +100,11 @@ possible). Two things guard against staleness/retirement:
 ```bash
 bun install
 cp .env.example .env   # fill in the values (S3/R2, Slack/Discord, Anthropic / Gemini / OpenAI)
+chmod 600 .env          # secrets file — owner read/write only
 ```
+
+For secret inventory, AI-key workspace/spend-limit setup, and rotation procedures, see
+[`docs/runbook-secrets.md`](docs/runbook-secrets.md) (Japanese).
 
 **Slack:** enable Socket Mode → obtain an App-Level Token (`connections:write`) and a Bot Token.
 Bot Token Scopes: `app_mentions:read` `chat:write` `im:history` `im:read` `channels:history`

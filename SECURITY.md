@@ -21,3 +21,6 @@ key — Anthropic / Gemini / OpenAI — and S3/R2 credentials). To keep them saf
 - Grant the **minimum scope**: the R2/S3 credentials only need read access to the knowledge bucket.
 - Rotate tokens if they may have been exposed (e.g. pasted into logs or chats).
 - The bot logs token usage but never logs secret values.
+
+For the full secret inventory, workspace/spend-limit setup for AI API keys, and step-by-step
+rotation procedures, see [`docs/runbook-secrets.md`](docs/runbook-secrets.md) (Japanese).
