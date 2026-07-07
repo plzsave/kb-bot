@@ -12,6 +12,19 @@ Use the spec-driven workflow (the sections below) **only when the user explicitl
 
 Rationale: spec ceremony applied to small/exploratory work adds friction, can lock unvalidated premises behind a veneer of rigor, and makes churn look like progress. (See user memory `dev-process-lightweight-default`.)
 
+## Everyday Development Flow (always applies, both modes)
+
+CI mechanically gates format / typecheck / tests / docker build — do not restate those here. The rules below cover what CI cannot enforce:
+
+1. **Before committing**: run `bun run format` (CI rejects unformatted code; save the round trip).
+2. **Before opening a nontrivial PR**: run `/code-review` on the diff — medium normally, high when touching the LLM surface (system prompt in `src/chat/core.ts`, `src/agent/`, `src/github.ts`, model selection). Findings are advisory: fix what is real, report the rest.
+3. **Touched the LLM surface?** Run `bun run kb:eval` and read the verdict as described in CONTRIBUTING.md (aggregate + gate lines only; individual FAILs flip run-to-run). **Never run `--update-baseline` on your own initiative** — accepting a new quality baseline is the user's decision.
+4. **Before merging any PR**: scan the changed-file list (`gh pr diff <n> --name-only`) for stray files. `.claude/` temp files slipped into commits twice; `.gitignore` now covers them, but the 30-second scan stays.
+5. **Dependabot PRs** (when the user asks to process them): green CI on a patch/minor bump → merge; major bump → read the changelog for breaking changes first. Conflicted Dependabot PR → comment `@dependabot rebase`; never resolve lockfile conflicts by hand.
+6. **Decisions that stay human** — surface them, never decide them yourself: eval baseline updates, model/cost/spend-limit changes, reading FAIL dumps in `eval/last-run/` for acceptability, and whether a change solves the right problem (premise validation).
+
+Human-facing verification procedures live in CONTRIBUTING.md — keep the two consistent; procedures there, behavior rules here.
+
 ## Project Context
 
 ### Paths

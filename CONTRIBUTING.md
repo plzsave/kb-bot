@@ -13,9 +13,10 @@ cp .env.example .env   # only needed for live runs (ingest / bot), not for tests
 
 ## Before opening a pull request
 
-Run both checks locally — CI runs the same ones:
+Run these checks locally — CI runs the same ones:
 
 ```bash
+bun run format      # Biome formatter (CI rejects unformatted code via format:check)
 bun run typecheck   # tsc --noEmit
 bun test            # pure-function unit tests (no credentials required)
 ```

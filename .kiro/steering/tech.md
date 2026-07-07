@@ -18,6 +18,7 @@ agent ループと chat コアは中立型のみに依存する。特定 SDK の
 - **LLM SDK**: `@anthropic-ai/sdk` / `@google/genai` / `openai`（プロバイダごとのアダプタ）
 - **ストレージ**: R2/S3（`aws4fetch` で素のアクセス）＋ SQLite（FTS5 索引・回答キャッシュ・usage ログ）
 - **日本語検索**: `tiny-segmenter`（形態素分割）＋ FTS5 `unicode61`（`trigram` は不採用）
+- **フォーマッタ**: Biome（formatter のみ有効・linter/assist はオフ。space/120桁。CI の `format:check` でゲート）
 
 ## 重要な技術的決定
 
