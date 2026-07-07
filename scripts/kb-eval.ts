@@ -614,8 +614,9 @@ async function main() {
           );
         }
       }
-    } catch {
-      /* 残量確認の失敗では eval を止めない */
+    } catch (e) {
+      // 止めはしないが黙らない: ここでの認証失敗は「以降の検索が全滅する run」の予兆（ノイズ誤診の元）。
+      console.warn(`⚠ レート残量確認に失敗（${(e as Error).message}）。GitHub 認証が壊れていると検索が全滅します`);
     }
   }
   console.log(

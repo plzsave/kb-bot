@@ -18,11 +18,7 @@ const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 export type TokenSource = () => Promise<string | undefined>;
 
 function base64url(input: string | Buffer): string {
-  return Buffer.from(input as Buffer | string)
-    .toString("base64")
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/, "");
+  return Buffer.from(input as Buffer | string).toString("base64url");
 }
 
 /**
@@ -96,9 +92,25 @@ export function loadGitHubTokenSource(): TokenSource | undefined {
   const appId = process.env.GITHUB_APP_ID?.trim();
   const installationId = process.env.GITHUB_APP_INSTALLATION_ID?.trim();
   const keyPath = process.env.GITHUB_APP_PRIVATE_KEY_PATH?.trim();
-  if (appId && installationId && keyPath) {
-    const privateKeyPem = readFileSync(keyPath, "utf8");
-    return createAppTokenSource({ appId, privateKeyPem, installationId });
+  const set = [appId, installationId, keyPath].filter(Boolean).length;
+  if (set === 3) {
+    let privateKeyPem: string;
+    try {
+      privateKeyPem = readFileSync(keyPath!, "utf8");
+    } catch (e) {
+      // App 認証は明示オプトインなので設定不備は fail-fast（無言で無認証へ落とすと private リポの
+      // 404 が「リポが無い」に見えて原因究明が長引く）。何が読めないかだけ明確に伝える。
+      throw new Error(
+        `GITHUB_APP_PRIVATE_KEY_PATH の PEM を読めません: ${keyPath}（${(e as Error).message}）。` +
+          "compose 利用時はマウント（compose.yaml のコメント参照）を確認してください",
+      );
+    }
+    return createAppTokenSource({ appId: appId!, privateKeyPem, installationId: installationId! });
+  }
+  // 一部だけ設定された App 変数は設定ミスの可能性が高い。黙ってフォールバックせず警告する
+  // （起動は止めない: PAT/無認証でも機能自体は動くため）。
+  if (set > 0) {
+    console.warn("⚠ GITHUB_APP_* が一部のみ設定されています（3つ揃うと App 認証が有効）。PAT/無認証で続行します");
   }
   const token = process.env.GITHUB_TOKEN?.trim();
   if (token) return async () => token;

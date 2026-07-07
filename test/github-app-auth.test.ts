@@ -143,6 +143,14 @@ test("loadGitHubTokenSource: App と PAT 両方あれば App が優先される"
   );
 });
 
+test("loadGitHubTokenSource: App 変数が一部のみなら PAT へフォールバックする（警告つき）", async () => {
+  let source: ReturnType<typeof loadGitHubTokenSource>;
+  withEnv({ GITHUB_APP_ID: "1", GITHUB_TOKEN: "pat" }, () => {
+    source = loadGitHubTokenSource();
+  });
+  expect(await source!()).toBe("pat");
+});
+
 test("loadGitHubTokenSource: PAT のみなら静的トークンを返す", async () => {
   let source: ReturnType<typeof loadGitHubTokenSource>;
   withEnv({ GITHUB_TOKEN: "pat-only" }, () => {

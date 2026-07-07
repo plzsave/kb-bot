@@ -306,6 +306,10 @@ async function fetchTextBlobs(
     if (hit != null) byPath.set(it.path, hit);
     return hit == null;
   });
+  // トークンはループ外で一度だけ解決する（5分マージン内の grep で期限切れはしない）。ループ内で解決すると
+  // 供給源の失敗が per-blob catch に吸われ「認証障害が偽の0件」に見える上、mint POST をミスごとに連打する。
+  // ここでの throw は searchCode の catch へ届き、エラーとして明示される。
+  const token = misses.length > 0 ? await auth?.() : undefined;
   let rateLimited = false;
   let next = 0;
   const worker = async () => {
@@ -313,7 +317,7 @@ async function fetchTextBlobs(
       const it = misses[next++]!;
       if (rateLimited) return; // 制限検知後は残りを無駄撃ちしない
       try {
-        const res = await fetch(`${API}/repos/${repo}/git/blobs/${it.sha}`, { headers: headers(await auth?.()) });
+        const res = await fetch(`${API}/repos/${repo}/git/blobs/${it.sha}`, { headers: headers(token) });
         if (!res.ok) {
           // レート制限は「取れなかった」と区別して記録する（黙殺すると 0 件に見えスパイラルの原因になる）。
           if (isRateLimitResponse(res.status, res.headers)) rateLimited = true;
