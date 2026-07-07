@@ -5,3 +5,6 @@ data/
 .env
 .env.local
 eval/last-run/
+# Claude Code がセッション中に作るローカル設定と一時ファイル（*.tmp.<pid>.<hash>）。
+# git add -A で誤コミットする事故が2度起きたため追跡対象外にする。
+.claude/settings.local.json*
