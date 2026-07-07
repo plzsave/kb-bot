@@ -23,7 +23,7 @@
     "@slack/bolt": "^4.7.3",
     "aws4fetch": "^1.0.20",
     "discord.js": "^14.26.4",
-    "openai": "^6.44.0",
+    "openai": "^6.45.0",
     "tiny-segmenter": "^0.2.0"
   },
   "devDependencies": {
