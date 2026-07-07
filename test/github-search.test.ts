@@ -85,3 +85,59 @@ test("grepFiles は maxTotal で全体を打ち切る", () => {
 test("grepFiles は語ゼロなら空", () => {
   expect(grepFiles(FILES, [], {}).matches).toEqual([]);
 });
+
+// ---- blob キャッシュ（sha 内容アドレス・LRU）とレート制限判定 ----
+import { Database } from "bun:sqlite";
+import { ensureBlobCache, cacheGetBlobs, cachePutBlob, pruneBlobCache, isRateLimitResponse } from "../src/github.ts";
+
+function memDb(): Database {
+  const db = new Database(":memory:");
+  ensureBlobCache(db);
+  return db;
+}
+
+test("blobCache: put → get で内容が返り、未登録 sha は返らない", () => {
+  const db = memDb();
+  cachePutBlob(db, "sha1", "const a = 1;");
+  const got = cacheGetBlobs(db, ["sha1", "sha-missing"]);
+  expect(got.get("sha1")).toBe("const a = 1;");
+  expect(got.has("sha-missing")).toBe(false);
+});
+
+test("blobCache: 同一 sha の put は上書き（内容アドレスなので実際は同内容）", () => {
+  const db = memDb();
+  cachePutBlob(db, "sha1", "v1");
+  cachePutBlob(db, "sha1", "v1");
+  expect(cacheGetBlobs(db, ["sha1"]).get("sha1")).toBe("v1");
+  const n = (db.prepare("SELECT COUNT(*) AS n FROM gh_blob_cache").get() as { n: number }).n;
+  expect(n).toBe(1);
+});
+
+test("blobCache: prune は last_used が古い順に削除し、ヒットで last_used が更新される（LRU）", () => {
+  const db = memDb();
+  cachePutBlob(db, "old", "x".repeat(100), 1000);
+  cachePutBlob(db, "mid", "y".repeat(100), 2000);
+  cachePutBlob(db, "new", "z".repeat(100), 3000);
+  // old をヒットさせて最新化 → 最古は mid になる
+  cacheGetBlobs(db, ["old"], 4000);
+  // 合計 300 バイト → 上限 250 に縮める＝最古 1 件（mid）だけ落ちる
+  expect(pruneBlobCache(db, 250)).toBe(1);
+  const rest = cacheGetBlobs(db, ["old", "mid", "new"], 5000);
+  expect(rest.has("old")).toBe(true);
+  expect(rest.has("mid")).toBe(false);
+  expect(rest.has("new")).toBe(true);
+});
+
+test("blobCache: 上限内なら prune は何も消さない", () => {
+  const db = memDb();
+  cachePutBlob(db, "a", "hello");
+  expect(pruneBlobCache(db, 1024)).toBe(0);
+});
+
+test("isRateLimitResponse: 403+remaining=0 / 429+retry-after は true、通常 403/404 は false", () => {
+  const h = (m: Record<string, string>) => ({ get: (k: string) => m[k.toLowerCase()] ?? null });
+  expect(isRateLimitResponse(403, h({ "x-ratelimit-remaining": "0" }))).toBe(true);
+  expect(isRateLimitResponse(429, h({ "retry-after": "60" }))).toBe(true);
+  expect(isRateLimitResponse(403, h({ "x-ratelimit-remaining": "4999" }))).toBe(false); // 権限系 403
+  expect(isRateLimitResponse(404, h({ "x-ratelimit-remaining": "0" }))).toBe(false);
+});

@@ -586,7 +586,7 @@ async function main() {
 
   const { provider, model, modelHard } = createLlm();
   const db = openDb(dbPath());
-  const github = loadGitHub();
+  const github = loadGitHub(db);
   rmSync(FAIL_DUMP_DIR, { recursive: true, force: true }); // 前回 run の FAIL dump を掃除
   // レート残量ガード: 枯渇状態で走らせると検索が静かに崩れスコアがノイズ化する（2026-07-03 に誤診の実害）。
   if (github) {
