@@ -6,7 +6,7 @@
 // 各ケースで本番と同じ前処理（FTS 前置き＋buildSystem＋ツール群）を組み立て、ツールを
 // ラップして「どのツールを・どんな引数で呼んだか」を記録し、expect と突き合わせて採点する。
 // 期待は「指定された項目だけ」検査する（未指定は不問）。全項目 PASS でケース合格。
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import type { Database } from "bun:sqlite";
@@ -161,6 +161,25 @@ function recordTool(tool: AgentTool, calls: Call[]): AgentTool {
       return output;
     },
   };
+}
+
+// FAIL ケースの実体（回答本文・ツール呼び出し）を残す。採点理由 1 行だけでは「なぜ落ちたか」を
+// 調査できない観測性ギャップ（2026-07-03 の drift 分析で実害）への対処。run 開始時に前回分を消す。
+const FAIL_DUMP_DIR = "./eval/last-run";
+function dumpFailCase(name: string, question: string, tier: string, calls: Call[], fails: string[], answer: string): void {
+  try {
+    mkdirSync(FAIL_DUMP_DIR, { recursive: true });
+    const slug = name.replace(/[^\w\u3040-\u30ff\u4e00-\u9fff-]+/g, "_").slice(0, 60);
+    const callsTxt = calls
+      .map((c) => `## ${c.name}\n入力: ${JSON.stringify(c.input)}\n出力(先頭500字): ${c.output.slice(0, 500)}`)
+      .join("\n\n");
+    writeFileSync(
+      `${FAIL_DUMP_DIR}/${slug}.md`,
+      `# ${name}\n\n- tier: ${tier}\n- 質問: ${question}\n\n## 採点 FAIL\n${fails.map((f) => `- ${f}`).join("\n")}\n\n## 回答本文\n${answer}\n\n## ツール呼び出し\n${callsTxt || "（なし）"}\n`,
+    );
+  } catch {
+    /* dump 失敗で eval を止めない */
+  }
 }
 
 const GH_TOOLS = new Set(["list_repo_tree", "read_repo_file", "search_repo_code"]);
@@ -568,6 +587,28 @@ async function main() {
   const { provider, model, modelHard } = createLlm();
   const db = openDb(dbPath());
   const github = loadGitHub(db);
+  rmSync(FAIL_DUMP_DIR, { recursive: true, force: true }); // 前回 run の FAIL dump を掃除
+  // レート残量ガード: 枯渇状態で走らせると検索が静かに崩れスコアがノイズ化する（2026-07-03 に誤診の実害）。
+  if (github) {
+    try {
+      const token = process.env.GITHUB_TOKEN?.trim();
+      const res = await fetch("https://api.github.com/rate_limit", {
+        headers: token ? { authorization: `Bearer ${token}` } : {},
+      });
+      const remaining = ((await res.json()) as { resources?: { core?: { remaining?: number } } }).resources?.core
+        ?.remaining;
+      if (remaining != null) {
+        console.log(`GitHub core レート残量: ${remaining}`);
+        if (remaining < 2000) {
+          console.warn(
+            "⚠ 残量が少なく、コード検索が途中で枯渇して結果がノイズ化する恐れがあります。リセット後の実行を推奨。",
+          );
+        }
+      }
+    } catch {
+      /* 残量確認の失敗では eval を止めない */
+    }
+  }
   console.log(
     `eval: provider=${provider.name} model=${model} modelHard=${modelHard ?? "-"} github=${github ? github.repos.join(",") : "off"} / ${cases.length} ケース\n`,
   );
@@ -627,6 +668,7 @@ async function main() {
         const trace = calls.map((c) => c.name).join(" → ") || "（ツール未使用）";
         const tier = escalated ? `↑${modelUsed}` : modelUsed;
         const status: CaseStatus = fails.length === 0 ? "PASS" : "FAIL";
+        if (status === "FAIL") dumpFailCase(c.name, c.question, tier, calls, fails, result.text);
         console.log(`${statusLabel(status, gate)}  ${c.name}${tag}  [${tier}] [${trace}]`);
         for (const f of fails) console.log(`        - ${f}`);
         results.push({ name: c.name, axis: c.axis, gate, monitor, status, fails });
