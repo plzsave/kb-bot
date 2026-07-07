@@ -8,10 +8,10 @@ kb-bot が実行時に必要とする秘密の一覧、AI API キーの無停止
 | 種別 | 環境変数 | 期限 | 漏洩時の影響範囲 | 失効方法 |
 |---|---|---|---|---|
 | AI API キー | `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `OPENAI_API_KEY` | 無期限（静的） | 選択プロバイダの課金を第三者が消費できる。専用ワークスペース＋支出上限で被害を頭打ちにする（下記） | 各社 Console でキーを Delete/Revoke |
-| GitHub 認証 | `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY_PATH` / `GITHUB_APP_INSTALLATION_ID`（推奨）または `GITHUB_TOKEN`（PAT） | App: 秘密鍵は無期限だが installation token は約1h自動更新／PAT: 有効期限あり・手動失効も可 | 対象リポの Contents（+ Issues）read-only。allowlist（`KB_GITHUB_REPOS`）外には及ばない | App: [github.com/settings/apps](https://github.com/settings/apps) で秘密鍵を Delete/再発行、または Install を解除／PAT: [github.com/settings/tokens](https://github.com/settings/tokens) で Delete |
+| GitHub 認証 | `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY_PATH` / `GITHUB_APP_INSTALLATION_ID`（推奨）または `GITHUB_TOKEN`（PAT） | App: 秘密鍵は無期限だが installation token は約1h自動更新／PAT: 有効期限あり・手動失効も可 | App の実際の露出範囲は Install 済みリポ（`github.com/settings/installations`）で決まる。`KB_GITHUB_REPOS`/`KB_ISSUE_REPOS` はコード側の追加 allowlist（Install 範囲の部分集合に絞る用）であり、この2つを狭めても Install 範囲自体は縮まらない | App: [github.com/settings/apps](https://github.com/settings/apps) で秘密鍵を Delete/再発行、または Install を解除／PAT: [github.com/settings/tokens](https://github.com/settings/tokens) で Delete |
 | Slack | `SLACK_BOT_TOKEN`（`xoxb-`） / `SLACK_APP_TOKEN`（`xapp-`） | 無期限（アプリ削除まで） | 招待済みワークスペース内で bot 権限の範囲まで操作可能 | Slack App 管理画面（OAuth & Permissions / Basic Information → App-Level Tokens）で Revoke → 再生成 |
 | Discord | `DISCORD_BOT_TOKEN` | 無期限（Reset するまで） | bot が参加しているサーバで bot 権限の範囲まで操作可能 | Discord Developer Portal → Bot → **Reset Token** |
-| S3/R2 | `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | 無期限（発行元次第） | ナレッジバケットへの読み書き（最小権限は read-only を推奨） | ストレージ提供元（Cloudflare R2 等）の管理画面でキーを削除・再発行 |
+| S3/R2 | `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | 無期限（発行元次第） | ナレッジバケットへの読み書き。**read-only では `kb:issues`（issue 取り込み）・`kb:prune --apply`（隔離）が書き込みに失敗する**ため、これらを使わないなら read-only、使うなら read-write が必要 | ストレージ提供元（Cloudflare R2 等）の管理画面でキーを削除・再発行 |
 
 ## AI キーのローテーション手順（無停止・二重キー方式）
 
@@ -33,7 +33,8 @@ bot が完全に応答不能になる。**
 1. [console.anthropic.com](https://console.anthropic.com) → Settings → **Workspaces** で bot 専用ワークスペース
    （例 `kb-bot`）を作成する。デフォルトワークスペースと混在させない。
 2. そのワークスペースで **Spend limit（支出上限）** を設定する。月額は Console の **Usage** で直近の実績を確認し、
-   余裕を見て設定する。漏洩時もこの上限で課金が頭打ちになる。
+   余裕を見て設定する。漏洩時もこの上限で課金が頭打ちになる。あわせて上限より低い閾値で
+   **使用量アラート**も設定する（無いと、正当な利用が上限に達して bot が無警告で応答不能になる）。
 3. そのワークスペース配下で API キーを新規発行し、上記のローテーション手順で `.env` に反映する。
 
 **Gemini / OpenAI を使う場合:** 同じ考え方（専用プロジェクト分離＋ budget/limit 設定）を各社 Console で行う。
