@@ -166,7 +166,14 @@ function recordTool(tool: AgentTool, calls: Call[]): AgentTool {
 // FAIL ケースの実体（回答本文・ツール呼び出し）を残す。採点理由 1 行だけでは「なぜ落ちたか」を
 // 調査できない観測性ギャップ（2026-07-03 の drift 分析で実害）への対処。run 開始時に前回分を消す。
 const FAIL_DUMP_DIR = "./eval/last-run";
-function dumpFailCase(name: string, question: string, tier: string, calls: Call[], fails: string[], answer: string): void {
+function dumpFailCase(
+  name: string,
+  question: string,
+  tier: string,
+  calls: Call[],
+  fails: string[],
+  answer: string,
+): void {
   try {
     mkdirSync(FAIL_DUMP_DIR, { recursive: true });
     const slug = name.replace(/[^\w\u3040-\u30ff\u4e00-\u9fff-]+/g, "_").slice(0, 60);
@@ -189,7 +196,9 @@ export function evalCase(expect: Expect, calls: Call[], answer: string): string[
   const used = new Set(calls.map((c) => c.name));
 
   if (expect.toolsUsedAny && !expect.toolsUsedAny.some((t) => used.has(t))) {
-    fails.push(`toolsUsedAny ${JSON.stringify(expect.toolsUsedAny)} のどれも使われなかった（使用: ${[...used].join(",") || "なし"}）`);
+    fails.push(
+      `toolsUsedAny ${JSON.stringify(expect.toolsUsedAny)} のどれも使われなかった（使用: ${[...used].join(",") || "なし"}）`,
+    );
   }
   for (const t of expect.toolsUsedAll ?? []) {
     if (!used.has(t)) fails.push(`必須ツール ${t} が使われなかった`);
@@ -201,9 +210,7 @@ export function evalCase(expect: Expect, calls: Call[], answer: string): string[
     // docs は「コードに行かず docs/前置きで答えた」で判定する。core.ts が FTS 上位を初期コンテキストに
     // 前置きするため、docs で足りる質問は search_knowledge を呼ばず答えうる＝ツール使用での判定は誤検知になる。
     const ok =
-      expect.source === "docs" ? !usedCode
-      : expect.source === "code" ? usedCode
-      : /* both */ usedDocs && usedCode;
+      expect.source === "docs" ? !usedCode : expect.source === "code" ? usedCode : /* both */ usedDocs && usedCode;
     if (!ok) fails.push(`source 期待=${expect.source} だが docs(検索)=${usedDocs} code=${usedCode}`);
   }
 
@@ -214,7 +221,9 @@ export function evalCase(expect: Expect, calls: Call[], answer: string): string[
 
   if (expect.readPathIncludes) {
     const hit = calls.some(
-      (c) => c.name === "read_repo_file" && String((c.input as { path?: string })?.path ?? "").includes(expect.readPathIncludes!),
+      (c) =>
+        c.name === "read_repo_file" &&
+        String((c.input as { path?: string })?.path ?? "").includes(expect.readPathIncludes!),
     );
     if (!hit) fails.push(`read_repo_file で "${expect.readPathIncludes}" を含む path を読まなかった`);
   }
@@ -255,11 +264,10 @@ export function validateCases(cases: RawCase[]): string[] {
       errors.push(`ケース "${c.name}": monitor は真偽値である必要があります（受領: ${JSON.stringify(c.monitor)}）`);
     }
     // fixtures は省略可。指定された場合は「文字列の配列」であること（防御的・最小、実在検査は実行ループ側）。
-    if (
-      c.fixtures !== undefined &&
-      !(Array.isArray(c.fixtures) && c.fixtures.every((f) => typeof f === "string"))
-    ) {
-      errors.push(`ケース "${c.name}": fixtures は文字列の配列である必要があります（受領: ${JSON.stringify(c.fixtures)}）`);
+    if (c.fixtures !== undefined && !(Array.isArray(c.fixtures) && c.fixtures.every((f) => typeof f === "string"))) {
+      errors.push(
+        `ケース "${c.name}": fixtures は文字列の配列である必要があります（受領: ${JSON.stringify(c.fixtures)}）`,
+      );
     }
   }
   return errors;

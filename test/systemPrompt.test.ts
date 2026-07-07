@@ -111,7 +111,7 @@ test("buildSystem: extra はベースを保ったまま末尾に連結される"
 
 test("resolver: インライン指定は S3 を見ず最優先", async () => {
   let calls = 0;
-  const s3 = { get: async () => ((calls++), "from-s3") } as unknown as S3Client;
+  const s3 = { get: async () => (calls++, "from-s3") } as unknown as S3Client;
   const r = createSystemExtraResolver({ inline: "  inline text  ", s3, key: "k" });
   expect(await r()).toBe("inline text");
   expect(calls).toBe(0);
@@ -119,7 +119,7 @@ test("resolver: インライン指定は S3 を見ず最優先", async () => {
 
 test("resolver: S3 取得は TTL 内でキャッシュされる", async () => {
   let calls = 0;
-  const s3 = { get: async () => ((calls++), `v${calls}`) } as unknown as S3Client;
+  const s3 = { get: async () => (calls++, `v${calls}`) } as unknown as S3Client;
   const r = createSystemExtraResolver({ s3, key: "k", ttlMs: 10_000 });
   expect(await r()).toBe("v1");
   expect(await r()).toBe("v1"); // キャッシュヒット＝再取得しない
@@ -128,7 +128,7 @@ test("resolver: S3 取得は TTL 内でキャッシュされる", async () => {
 
 test("resolver: TTL=0 は毎回取得する", async () => {
   let calls = 0;
-  const s3 = { get: async () => ((calls++), `v${calls}`) } as unknown as S3Client;
+  const s3 = { get: async () => (calls++, `v${calls}`) } as unknown as S3Client;
   const r = createSystemExtraResolver({ s3, key: "k", ttlMs: 0 });
   expect(await r()).toBe("v1");
   expect(await r()).toBe("v2");

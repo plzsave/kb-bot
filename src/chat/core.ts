@@ -146,7 +146,10 @@ export async function answer(
 
   // ② FTS5/BM25 で関連チャンクを取得し初期コンテキストに前置き（埋め込み課金ゼロ）
   const hits = search(db, q, TOP_K);
-  logUsage(db, hits.map((h) => h.docKey)); // 検索ヒットを retrieved として記録（kb-prune 用）
+  logUsage(
+    db,
+    hits.map((h) => h.docKey),
+  ); // 検索ヒットを retrieved として記録（kb-prune 用）
   const initialPrompt = buildInitialPrompt(hits, q, !!github);
 
   // ③ エージェント実行（既定は最安ティア・プロンプトキャッシュ・tool use）。逐次更新。
@@ -165,10 +168,7 @@ export async function answer(
   };
 
   // スレッド/DM の過去発言を会話履歴として前置きし、今回の質問を最後に積む。
-  const messages: LlmMessage[] = [
-    ...normalizeHistory(history),
-    { role: "user", content: initialPrompt },
-  ];
+  const messages: LlmMessage[] = [...normalizeHistory(history), { role: "user", content: initialPrompt }];
 
   // LLM 呼び出しは失敗しうる（レート制限・ネットワーク・キー不正等）。失敗時に「考え中…」のまま
   // 固まる/未処理例外で落ちることを防ぎ、プレースホルダをエラー文言に置き換える。

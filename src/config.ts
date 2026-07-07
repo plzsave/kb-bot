@@ -85,7 +85,10 @@ export function loadIssueConfig(reposOverride?: string[]): IssueConfig {
 }
 
 function splitCsv(v: string | undefined): string[] {
-  return (v ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return (v ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 // 追加システムプロンプトの既定オブジェクトキー。ナレッジと混ざらないよう _config/ 配下に置く

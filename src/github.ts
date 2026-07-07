@@ -31,7 +31,15 @@ export function isTextPath(path: string): boolean {
 
 /** 検索語を空白区切りで語に分割（小文字化・トリム・重複除去）。識別子（TTL_MS 等）は分割しない。純関数。 */
 export function searchTerms(query: string): string[] {
-  return [...new Set(query.toLowerCase().split(/\s+/).map((s) => s.trim()).filter(Boolean))];
+  return [
+    ...new Set(
+      query
+        .toLowerCase()
+        .split(/\s+/)
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+  ];
 }
 
 /**
@@ -127,9 +135,7 @@ export function renderTree(paths: string[], subdir?: string): string {
     const inDir = paths.filter((p) => p.startsWith(prefix));
     if (inDir.length === 0) return `（${subdir} 配下にファイルが見つかりません）`;
     const shown = inDir.slice(0, MAX_TREE).join("\n");
-    return inDir.length > MAX_TREE
-      ? `${shown}\n（…${MAX_TREE} 件で切り詰め。subdir をさらに絞ってください）`
-      : shown;
+    return inDir.length > MAX_TREE ? `${shown}\n（…${MAX_TREE} 件で切り詰め。subdir をさらに絞ってください）` : shown;
   }
 
   if (paths.length <= MAX_TREE) return paths.join("\n");
@@ -288,7 +294,12 @@ async function fetchTextBlobs(
 ): Promise<{ files: { path: string; content: string }[]; rateLimited: boolean }> {
   const byPath = new Map<string, string>();
   // キャッシュで解決できる分はネットワークに行かない（sha は不変＝内容一致が保証される）。
-  const cached = blobDb ? cacheGetBlobs(blobDb, items.map((i) => i.sha)) : new Map<string, string>();
+  const cached = blobDb
+    ? cacheGetBlobs(
+        blobDb,
+        items.map((i) => i.sha),
+      )
+    : new Map<string, string>();
   const misses = items.filter((it) => {
     const hit = cached.get(it.sha);
     if (hit != null) byPath.set(it.path, hit);
@@ -384,7 +395,11 @@ export function createGitHub(token: string | undefined, repos: string[], blobDb?
         if (startLine != null) {
           const lines = text.split("\n");
           const from = Math.max(1, Math.floor(startLine));
-          const to = Math.min(lines.length, Math.floor(endLine ?? from + MAX_RANGE_LINES - 1), from + MAX_RANGE_LINES - 1);
+          const to = Math.min(
+            lines.length,
+            Math.floor(endLine ?? from + MAX_RANGE_LINES - 1),
+            from + MAX_RANGE_LINES - 1,
+          );
           const slice = lines.slice(from - 1, to).join("\n");
           return `# ${path} (L${from}-L${to} / 全${lines.length}行)\n${withLineNumbers(slice, from)}`;
         }
@@ -465,11 +480,7 @@ export function createGitHub(token: string | undefined, repos: string[], blobDb?
  * リポの HEAD（既定ブランチ）に path が存在するか。kb-prune の code_drift 判定用。
  * true=存在 / false=404 / null=判定不能（権限・ネットワーク等。誤検知を避け null は flag しない）。
  */
-export async function repoFileExists(
-  token: string | undefined,
-  repo: string,
-  path: string,
-): Promise<boolean | null> {
+export async function repoFileExists(token: string | undefined, repo: string, path: string): Promise<boolean | null> {
   if (rejectPath(path)) return null; // 不正パスは判定対象外
   try {
     const url = `${API}/repos/${repo}/contents/${encodeURIComponent(path).replace(/%2F/g, "/")}`;

@@ -1,6 +1,14 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { openDb, replaceDoc, search, buildMatchQuery, countChunks, dropWeakHits, pruneDocsNotIn } from "../src/kb/db.ts";
+import {
+  openDb,
+  replaceDoc,
+  search,
+  buildMatchQuery,
+  countChunks,
+  dropWeakHits,
+  pruneDocsNotIn,
+} from "../src/kb/db.ts";
 import { chunkMarkdown } from "../src/kb/chunk.ts";
 import { isStaleKey, isReservedKey } from "../src/kb/ingest.ts";
 

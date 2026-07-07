@@ -25,7 +25,11 @@ function parseArgs(argv: string[]) {
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i]!;
     if (v === "--dry-run") a.dryRun = true;
-    else if (v === "--repos") a.repos = (argv[++i] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+    else if (v === "--repos")
+      a.repos = (argv[++i] ?? "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
     else if (v === "--since") a.since = argv[++i];
     else if (v === "--model") a.model = argv[++i];
     else if (v === "--max-issues") a.maxIssues = Number(argv[++i]);

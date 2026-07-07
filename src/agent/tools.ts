@@ -27,7 +27,10 @@ export function searchKnowledgeTool(db: Database): AgentTool {
       const { query, limit } = (input ?? {}) as { query?: string; limit?: number };
       if (!query) return "（検索語が空でした）";
       const hits = search(db, query, Math.min(limit ?? 5, 10));
-      logUsage(db, hits.map((h) => h.docKey)); // 検索ヒットを retrieved として記録（kb-prune 用）
+      logUsage(
+        db,
+        hits.map((h) => h.docKey),
+      ); // 検索ヒットを retrieved として記録（kb-prune 用）
       return formatHits(hits);
     },
   };

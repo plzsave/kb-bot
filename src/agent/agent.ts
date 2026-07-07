@@ -1,10 +1,4 @@
-import type {
-  LlmMessage,
-  LlmProvider,
-  LlmToolDef,
-  LlmToolResultBlock,
-  LlmUsage,
-} from "../llm/provider.ts";
+import type { LlmMessage, LlmProvider, LlmToolDef, LlmToolResultBlock, LlmUsage } from "../llm/provider.ts";
 
 // ネイティブ tool use のループ。ループ論理はプロバイダ詳細から独立し（中立型 LlmProvider に依存）、
 // ツール実体は注入する。ストリーミングで逐次 onDelta を呼ぶ。プロンプトキャッシュは cacheHint で
