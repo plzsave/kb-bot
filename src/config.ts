@@ -5,6 +5,7 @@ import type { LlmProvider } from "./llm/provider.ts";
 import { createLlm } from "./llm/factory.ts";
 import { S3Client } from "./s3.ts";
 import { createSystemExtraResolver } from "./chat/systemExtra.ts";
+import { loadGitHubTokenSource, type TokenSource } from "./github-app-auth.ts";
 
 export interface S3Config {
   endpoint: string;
@@ -61,8 +62,8 @@ export function loadBotConfig(): BotConfig {
 export interface IssueConfig {
   /** issue 収集対象リポジトリ（KB_GITHUB_REPOS とは分離）。 */
   repos: string[];
-  /** read-only PAT（Issues:read）。未設定でも public なら動くが推奨。 */
-  githubToken: string | undefined;
+  /** GitHub 認証（App の installation token または read-only PAT）。未設定でも public なら動くが推奨。 */
+  githubAuth: TokenSource | undefined;
   /** この件数未満のコメントの issue は除外（既定1）。 */
   minComments: number;
   provider: LlmProvider;
@@ -77,7 +78,7 @@ export function loadIssueConfig(reposOverride?: string[]): IssueConfig {
   const { provider, model } = createLlm();
   return {
     repos,
-    githubToken: process.env.GITHUB_TOKEN?.trim() || undefined,
+    githubAuth: loadGitHubTokenSource(),
     minComments: Number.isFinite(min) && min >= 0 ? min : 1,
     provider,
     model,

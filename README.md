@@ -119,8 +119,21 @@ Send Messages in Threads, Read Message History** (in a channel the bot opens a t
 and answers there; thread/DM follow-ups carry context, like Slack).
 
 **GitHub (optional, "explain specs from real code"):** set `KB_GITHUB_REPOS` to a comma-separated
-allowlist (`owner/name`). For private repos or code search, add a `GITHUB_TOKEN` (a fine-grained PAT
-with read-only Contents, scoped to those repos). Public repos work without a token (tree + file read).
+allowlist (`owner/name`). For private repos or code search, add authentication. Public repos work
+without a token (tree + file read). Two options:
+
+- **GitHub App (recommended)** — no token rotation, ever. The bot mints short-lived installation
+  tokens (~1h, auto-refreshed) at runtime from the App's non-expiring private key:
+  1. [github.com/settings/apps](https://github.com/settings/apps) → **New GitHub App**. Uncheck
+     **Webhook → Active**. Repository permissions: **Contents: Read-only** (plus **Issues: Read-only**
+     if you use `kb:issues`). Install target: **Only on this account**.
+  2. Note the **App ID**, then **Generate a private key** (downloads a `.pem` — the only secret you keep).
+  3. **Install App** on your account, selecting the repos in `KB_GITHUB_REPOS` / `KB_ISSUE_REPOS`.
+     The **Installation ID** is the number in the URL: `github.com/settings/installations/<id>`.
+  4. Set `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_APP_INSTALLATION_ID` in `.env`
+     (with docker compose, mount the `.pem` read-only — see the comment in `compose.yaml`).
+- **Fine-grained PAT** — set `GITHUB_TOKEN` (read-only Contents, scoped to those repos). Simpler,
+  but expires and must be rotated by hand. Ignored when the three App variables are set.
 
 ## Reading code as the source of truth
 

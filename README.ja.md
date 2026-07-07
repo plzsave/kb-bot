@@ -113,8 +113,21 @@ Bot Token Scopes: `app_mentions:read` `chat:write` `im:history` `im:read` `chann
 追撃は文脈を引き継ぐ（Slack と同等）。
 
 **GitHub（任意・「実コードで仕様を語る」機能）**: `KB_GITHUB_REPOS` に参照を許可するリポを
-`owner/name` のカンマ区切りで設定。private リポや code search には `GITHUB_TOKEN`（Contents read-only の
-fine-grained PAT を対象リポに限定）が要る。public リポなら tree/read はトークン無しでも動く。
+`owner/name` のカンマ区切りで設定。private リポや code search には認証が要る（public リポの tree/read は
+トークン無しでも動く）。認証は2方式:
+
+- **GitHub App（推奨）** — トークンのローテーションが一切不要になる。無期限の秘密鍵から実行時に
+  短命の installation token（約1h・自動更新）を発行する方式:
+  1. [github.com/settings/apps](https://github.com/settings/apps) → **New GitHub App**。
+     **Webhook → Active のチェックを外す**。Repository permissions は **Contents: Read-only**
+     （`kb:issues` を使うなら **Issues: Read-only** も）。インストール先は **Only on this account**。
+  2. **App ID** を控え、**Generate a private key** で `.pem` をダウンロード（保管する唯一の秘密）。
+  3. **Install App** で自分のアカウントに導入し、`KB_GITHUB_REPOS` / `KB_ISSUE_REPOS` のリポを選択。
+     **Installation ID** は導入後の URL `github.com/settings/installations/<数値>` の数値部分。
+  4. `.env` に `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY_PATH` / `GITHUB_APP_INSTALLATION_ID` を設定
+     （docker compose では `.pem` を read-only mount する。`compose.yaml` のコメント参照）。
+- **fine-grained PAT** — `GITHUB_TOKEN`（Contents read-only・対象リポ限定）を設定。手軽だが有効期限が
+  あり手動ローテーションが要る。App の3変数が揃っている場合はそちらが優先される。
 
 ## 実コードを真実として仕様を語る
 
