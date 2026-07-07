@@ -43,7 +43,13 @@
       "Bash(git push *)",
       "Bash(git pull *)",
       "Bash(grep *)",
-      "Bash(git commit -q -m 'feat\\(eval-observability\\): FAIL 時の回答本文 dump と GitHub レート残量ガードを追加 *)"
+      "Bash(git commit -q -m 'feat\\(eval-observability\\): FAIL 時の回答本文 dump と GitHub レート残量ガードを追加 *)",
+      "Bash(gh run *)",
+      "WebFetch(domain:docs.github.com)",
+      "Bash(git fetch *)",
+      "Bash(git worktree *)",
+      "Bash(git branch *)",
+      "Bash(git commit -q -m 'chore: 誤コミットされた settings.local.json の一時ファイルを削除 *)"
     ]
   }
 }
