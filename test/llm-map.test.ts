@@ -119,7 +119,5 @@ test("OpenAI(Responses): tool_use のみ（テキスト無し）は function_cal
   const out = toResponsesInput([
     { role: "assistant", content: [{ type: "tool_use", id: "c1", name: "echo", input: { a: 1 } }] },
   ]);
-  expect(out).toEqual([
-    { type: "function_call", call_id: "c1", name: "echo", arguments: '{"a":1}' },
-  ]);
+  expect(out).toEqual([{ type: "function_call", call_id: "c1", name: "echo", arguments: '{"a":1}' }]);
 });

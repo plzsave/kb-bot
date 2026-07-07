@@ -73,8 +73,16 @@ function buildCorpus(): Database {
 const ROUTING: { name: string; question: string; expectTop: string }[] = [
   { name: "API トークンの有効期限 → auth.md", question: "API トークンの有効期限は何日ですか？", expectTop: "auth.md" },
   { name: "権限レベルの種類 → auth.md", question: "権限レベルにはどんな種類がありますか？", expectTop: "auth.md" },
-  { name: "デプロイのロールバック → deploy.md", question: "デプロイのロールバックはどうやりますか？", expectTop: "deploy.md" },
-  { name: "AI レビューのスキップ → github-app.md", question: "緊急時に AI レビューをスキップする方法は？", expectTop: "github-app.md" },
+  {
+    name: "デプロイのロールバック → deploy.md",
+    question: "デプロイのロールバックはどうやりますか？",
+    expectTop: "deploy.md",
+  },
+  {
+    name: "AI レビューのスキップ → github-app.md",
+    question: "緊急時に AI レビューをスキップする方法は？",
+    expectTop: "github-app.md",
+  },
 ];
 
 for (const c of ROUTING) {

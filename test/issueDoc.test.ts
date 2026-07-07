@@ -63,7 +63,9 @@ test("assembleMarkdown: frontmatter は剥がせて本文は索引可能", () =>
   expect(stripped.startsWith("# Issue #42")).toBe(true);
   expect(stripped).not.toContain("issue_number");
   // chunk しても frontmatter のキーは索引本文に出ない
-  const text = chunkMarkdown(md).map((c) => c.text).join("\n");
+  const text = chunkMarkdown(md)
+    .map((c) => c.text)
+    .join("\n");
   expect(text).not.toContain("issue_number");
   expect(text).toContain("ログイン不可");
 });

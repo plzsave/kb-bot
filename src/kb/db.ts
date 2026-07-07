@@ -100,4 +100,3 @@ export function buildMatchQuery(raw: string): string | null {
   const uniq = [...new Set(terms)];
   return uniq.map((t) => `"${t.replace(/"/g, '""')}"`).join(" OR ");
 }
-

@@ -31,14 +31,17 @@ function normalize(q: string): string {
 // KB_MODEL/プロバイダを切り替えた後に旧モデルが生成した回答が配信されるのを防ぐ
 // （別 namespace＝別キー＝miss して新モデルで再生成される）。未指定なら "" で従来互換。
 function keyFor(q: string, namespace: string): string {
-  return createHash("sha256").update(`${namespace}\0${normalize(q)}`).digest("hex");
+  return createHash("sha256")
+    .update(`${namespace}\0${normalize(q)}`)
+    .digest("hex");
 }
 
 export function getCachedAnswer(db: Database, question: string, namespace = ""): string | null {
   const key = keyFor(question, namespace);
-  const row = db.query("SELECT answer, created_at FROM answer_cache WHERE key = ?").get(key) as
-    | { answer: string; created_at: number }
-    | null;
+  const row = db.query("SELECT answer, created_at FROM answer_cache WHERE key = ?").get(key) as {
+    answer: string;
+    created_at: number;
+  } | null;
   if (!row) return null;
   // 期限切れは失効させる（削除して miss 扱い＝次回再生成）。
   if (TTL_MS > 0 && Date.now() - row.created_at > TTL_MS) {
@@ -50,8 +53,10 @@ export function getCachedAnswer(db: Database, question: string, namespace = ""):
 }
 
 export function putCachedAnswer(db: Database, question: string, answer: string, namespace = ""): void {
-  db.run(
-    "INSERT OR REPLACE INTO answer_cache (key, question, answer, created_at, hits) VALUES (?, ?, ?, ?, 0)",
-    [keyFor(question, namespace), question, answer, Date.now()],
-  );
+  db.run("INSERT OR REPLACE INTO answer_cache (key, question, answer, created_at, hits) VALUES (?, ?, ?, ?, 0)", [
+    keyFor(question, namespace),
+    question,
+    answer,
+    Date.now(),
+  ]);
 }

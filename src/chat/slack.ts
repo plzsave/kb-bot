@@ -40,13 +40,14 @@ function convertInline(text: string): string {
   // アンダースコアは Python のダンダー（__main__.py 等）を壊さないよう一切触らない。
   return text
     .split(/(`[^`]+`)/g)
-    .map((seg, i) =>
-      i % 2 === 1
-        ? seg
-        : seg
-            .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "<$2|$1>") // [t](u) -> <u|t>
-            .replace(/\*{2,}/g, "*") // ** / *** / 不揃いな ** を Slack の * に統一
-            .replace(/~{2,}/g, "~"), // ~~打消し~~ -> ~打消し~
+    .map(
+      (seg, i) =>
+        i % 2 === 1
+          ? seg
+          : seg
+              .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "<$2|$1>") // [t](u) -> <u|t>
+              .replace(/\*{2,}/g, "*") // ** / *** / 不揃いな ** を Slack の * に統一
+              .replace(/~{2,}/g, "~"), // ~~打消し~~ -> ~打消し~
     )
     .join("");
 }

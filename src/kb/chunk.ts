@@ -26,7 +26,10 @@ export function stripFrontmatter(md: string): string {
   if (lines[0]?.trim() !== "---") return md;
   for (let i = 1; i < lines.length; i++) {
     if (lines[i]!.trim() === "---") {
-      return lines.slice(i + 1).join("\n").replace(/^\n+/, "");
+      return lines
+        .slice(i + 1)
+        .join("\n")
+        .replace(/^\n+/, "");
     }
   }
   return md;
@@ -78,7 +81,10 @@ function splitByHeadings(md: string): Section[] {
 
 // 段落（空行区切り）を貪欲に詰め、予算超過で切る。単一段落が予算超なら行単位でさらに割る。
 function splitByBudget(body: string): string[] {
-  const paras = body.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+  const paras = body
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean);
   const out: string[] = [];
   let buf = "";
   const push = () => {
