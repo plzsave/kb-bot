@@ -135,7 +135,7 @@ without a token (tree + file read). Two options:
   3. **Install App** on your account, selecting the repos in `KB_GITHUB_REPOS` / `KB_ISSUE_REPOS`.
      The **Installation ID** is the number in the URL: `github.com/settings/installations/<id>`.
   4. Set `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_APP_INSTALLATION_ID` in `.env`
-     (with docker compose, mount the `.pem` read-only — see the comment in `compose.yaml`).
+     (with docker compose, mount the `.pem` read-only — see [Self-hosting](#self-hosting-docker-always-on)).
 - **Fine-grained PAT** — set `GITHUB_TOKEN` (read-only Contents, scoped to those repos). Simpler,
   but expires and must be rotated by hand. Ignored when the three App variables are set.
 
@@ -184,6 +184,80 @@ bun run start:discord    # Discord               or: bun run dev:discord
 
 Slack responds to channel mentions and DMs; Discord responds to mentions and DMs.
 
+## Self-hosting (Docker, always-on)
+
+Socket Mode keeps a persistent connection, so the process must stay running. A single container
+runs anywhere (VPS / Fly.io / Railway / Render / ECS Fargate / a home server).
+
+### What actually runs on your server
+
+```
+╔═ Your server — ONE container (VPS / Fly.io / ECS Fargate 1 task / home server)
+║
+║  docker-entrypoint.sh → kb:ingest → builds the FTS5 index, then starts the bot
+║
+║  kb-bot (bun, long-running)
+║    ├─ Slack Bolt / discord.js — holds the persistent WebSocket
+║    ├─ agent — the tool-use loop (search docs / read code / answer)
+║    └─ heartbeat → Docker HEALTHCHECK (catches hangs, not just crashes)
+║
+║  /app/data/kb.sqlite — one file, on the `kbdata` volume (survives restarts)
+║    ├─ FTS5 index      derived from R2; rebuilt on every boot, so it's disposable
+║    ├─ answer cache    persist this — losing it costs real LLM calls
+║    └─ retrieval log   powers kb:prune's "unused" signal
+╚═
+       │                │                │                  │
+       ▼                ▼                ▼                  ▼
+  Slack / Discord    R2 / S3         GitHub API          LLM API
+  WebSocket          your .md docs   code, read live     ★ the only
+  free               ~free           free tier             metered cost
+```
+
+That box is the whole system. There is **no vector database, no embedding API, and no server-side
+DB** to run alongside it — which is why the fixed cost is one small always-on container, and the
+only variable cost is the rightmost arrow. An answer-cache hit never reaches the LLM API at all.
+
+### Running it
+
+Pull the published image (tagged releases are pushed to GHCR), or build locally:
+
+```bash
+# Pull a released image
+docker pull ghcr.io/plzsave/kb-bot:latest
+
+# Or build & run from source
+cp .env.example .env   # fill in the values
+docker compose up -d --build
+docker compose logs -f # watch startup, ingest, and usage logs
+```
+
+On boot, `docker-entrypoint.sh` ingests the knowledge from R2/S3 (`kb:ingest`) and then starts
+the bot. The FTS index is derived from R2, so rebuilding it on every boot is fine.
+
+- **Persisting the answer cache:** `compose.yaml` mounts the `kbdata` volume at `/app/data` so the
+  cache survives restarts. `KB_DB_PATH` is pinned to `/app/data/kb.sqlite` in compose (overriding `.env`).
+- **Skipping boot-time ingest:** set `KB_INGEST_ON_BOOT=false` if you reuse a persisted index.
+- **Refreshing knowledge:** after updating the `.md` files in R2, run `docker compose restart`.
+- **Choosing the platform:** `KB_PLATFORM=slack` (default) or `discord`. To run Discord, set
+  `KB_PLATFORM=discord` and `DISCORD_BOT_TOKEN` in `.env`. To run both at once, define two compose
+  services that differ only by `KB_PLATFORM`.
+- **GitHub App private key:** uncomment the `.pem` mount in `compose.yaml` and point
+  `GITHUB_APP_PRIVATE_KEY_PATH=/app/github-app.pem` at it:
+
+  ```yaml
+  volumes:
+    - kbdata:/app/data
+    - ./github-app.pem:/app/github-app.pem:ro
+  ```
+
+### Provider notes
+
+- **VPS / home server:** the compose file as-is. Simplest.
+- **Fly.io:** `fly launch` with the same image (map `[mounts]` to `/app/data` in `fly.toml` to persist the cache).
+- **AWS:** for an always-on process, **ECS Fargate (1 task)** is the natural fit. Cheapest is an
+  **EC2 t4g.nano**; **Lightsail** is the simplest flat-rate option. **Lambda will not work**
+  (it cannot hold a persistent WebSocket). On Fargate's ephemeral FS, persist the answer cache via EFS or re-warm it.
+
 ## Keeping knowledge fresh (optional batch tools)
 
 Beyond serving answers, kb-bot ships two **optional** batch jobs that treat your knowledge as
@@ -218,42 +292,6 @@ bun run kb:prune --apply                     # quarantine them to _stale/ (rever
 These compose into a loop: **`kb:issues` grows → `kb:ingest` indexes → answering logs usage →
 `kb:prune` retires the unused/drifted.** It's why "docs *can* age" (above) is a managed condition, not
 just a caveat.
-
-## Self-hosting (Docker, always-on)
-
-Socket Mode keeps a persistent connection, so the process must stay running. A single container
-runs anywhere (VPS / Fly.io / Railway / Render / ECS Fargate / a home server).
-
-Pull the published image (tagged releases are pushed to GHCR), or build locally:
-
-```bash
-# Pull a released image
-docker pull ghcr.io/plzsave/kb-bot:latest
-
-# Or build & run from source
-cp .env.example .env   # fill in the values
-docker compose up -d --build
-docker compose logs -f # watch startup, ingest, and usage logs
-```
-
-On boot, `docker-entrypoint.sh` ingests the knowledge from R2/S3 (`kb:ingest`) and then starts
-the bot. The FTS index is derived from R2, so rebuilding it on every boot is fine.
-
-- **Persisting the answer cache:** `compose.yaml` mounts the `kbdata` volume at `/app/data` so the
-  cache survives restarts. `KB_DB_PATH` is pinned to `/app/data/kb.sqlite` in compose (overriding `.env`).
-- **Skipping boot-time ingest:** set `KB_INGEST_ON_BOOT=false` if you reuse a persisted index.
-- **Refreshing knowledge:** after updating the `.md` files in R2, run `docker compose restart`.
-- **Choosing the platform:** `KB_PLATFORM=slack` (default) or `discord`. To run Discord, set
-  `KB_PLATFORM=discord` and `DISCORD_BOT_TOKEN` in `.env`. To run both at once, define two compose
-  services that differ only by `KB_PLATFORM`.
-
-### Provider notes
-
-- **VPS / home server:** the compose file as-is. Simplest.
-- **Fly.io:** `fly launch` with the same image (map `[mounts]` to `/app/data` in `fly.toml` to persist the cache).
-- **AWS:** for an always-on process, **ECS Fargate (1 task)** is the natural fit. Cheapest is an
-  **EC2 t4g.nano**; **Lightsail** is the simplest flat-rate option. **Lambda will not work**
-  (it cannot hold a persistent WebSocket). On Fargate's ephemeral FS, persist the answer cache via EFS or re-warm it.
 
 ## Layout
 

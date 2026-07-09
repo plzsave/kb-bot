@@ -129,7 +129,7 @@ Bot Token Scopes: `app_mentions:read` `chat:write` `im:history` `im:read` `chann
   3. **Install App** で自分のアカウントに導入し、`KB_GITHUB_REPOS` / `KB_ISSUE_REPOS` のリポを選択。
      **Installation ID** は導入後の URL `github.com/settings/installations/<数値>` の数値部分。
   4. `.env` に `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY_PATH` / `GITHUB_APP_INSTALLATION_ID` を設定
-     （docker compose では `.pem` を read-only mount する。`compose.yaml` のコメント参照）。
+     （docker compose では `.pem` を read-only mount する。[セルフホスト](#セルフホストdocker常駐)参照）。
 - **fine-grained PAT** — `GITHUB_TOKEN`（Contents read-only・対象リポ限定）を設定。手軽だが有効期限が
   あり手動ローテーションが要る。App の3変数が揃っている場合はそちらが優先される。
 
@@ -176,6 +176,79 @@ bun run start:discord    # Discord                or: bun run dev:discord
 
 Slack はチャンネルでのメンションと DM、Discord はメンションと DM に反応する。
 
+## セルフホスト（Docker・常駐）
+
+Socket Mode は常時接続のため常駐プロセスが要る。コンテナ1つでどこでも（VPS / Fly.io / Railway /
+Render / ECS Fargate / 自宅サーバ）動かせるようにしてある。
+
+### サーバー上で何が動くか
+
+```
+╔═ あなたのサーバー ─ コンテナ1つ（VPS / Fly.io / ECS Fargate 1タスク / 自宅サーバ）
+║
+║  docker-entrypoint.sh → kb:ingest で FTS5 索引を構築 → Bot 起動
+║
+║  kb-bot（bun・常駐プロセス）
+║    ├─ Slack Bolt / discord.js — 常時接続の WebSocket を保持
+║    ├─ agent — tool-use ループ（ドキュメント検索／コード読解／回答）
+║    └─ heartbeat → Docker HEALTHCHECK（クラッシュだけでなくハングも検知）
+║
+║  /app/data/kb.sqlite — ファイル1つ。`kbdata` ボリューム上（再起動後も残る）
+║    ├─ FTS5 索引       R2 からの派生物。毎起動で作り直すので捨ててよい
+║    ├─ 回答キャッシュ  ここは永続させる（失うと LLM 課金が実際に増える）
+║    └─ retrieval ログ  kb:prune の「unused」判定に使う
+╚═
+       │                │                │                  │
+       ▼                ▼                ▼                  ▼
+  Slack / Discord    R2 / S3         GitHub API          LLM API
+  WebSocket          あなたの .md    コードを都度読む    ★従量課金は
+  無料               ほぼ無料        無料枠                ここだけ
+```
+
+この箱がシステムの全部だ。**ベクトル DB もエンベディング API もサーバー側 DB も無い**ので、固定費は
+「小さな常駐コンテナ1つ」だけ、変動費は右端の矢印だけになる。回答キャッシュがヒットした質問は、
+そもそも LLM API に到達しない。
+
+### 動かす
+
+公開イメージを pull するか（タグ付きリリースを GHCR に push している）、ローカルでビルドする:
+
+```bash
+# 公開イメージを pull
+docker pull ghcr.io/plzsave/kb-bot:latest
+
+# もしくはソースからビルドして起動
+cp .env.example .env   # 値を埋める
+docker compose up -d --build
+docker compose logs -f # 起動・取り込み・usage ログを確認
+```
+
+起動時に `docker-entrypoint.sh` が R2/S3 からナレッジを取り込み（`kb:ingest`）→ Bot を起動する。
+FTS インデックスは R2 から導出する派生物なので、コンテナ起動のたびに作り直してよい。
+
+- **回答キャッシュの永続**: `compose.yaml` の `kbdata` ボリュームを `/app/data` にマウントし、再起動後も残す。
+  `KB_DB_PATH` は compose で `/app/data/kb.sqlite` に固定（`.env` の値より優先）。
+- **起動時取り込みのスキップ**: 永続インデックスを使い回す等で取り込み不要なら `KB_INGEST_ON_BOOT=false`。
+- **ナレッジ更新の反映**: R2 の md を更新したら `docker compose restart`（再起動時に再取り込み）。
+- **プラットフォーム切替**: `KB_PLATFORM=slack`（既定）/ `discord`。Discord で常駐するなら `.env` で
+  `KB_PLATFORM=discord` と `DISCORD_BOT_TOKEN` を設定。両方を同時に常駐させたい場合は、compose の
+  サービスを2つ（`KB_PLATFORM` 違い）に分ければよい。
+- **GitHub App の秘密鍵**: `compose.yaml` の `.pem` マウント行のコメントを外し、`.env` の
+  `GITHUB_APP_PRIVATE_KEY_PATH=/app/github-app.pem` をそこへ向ける:
+
+  ```yaml
+  volumes:
+    - kbdata:/app/data
+    - ./github-app.pem:/app/github-app.pem:ro
+  ```
+
+### プロバイダ別メモ
+
+- **VPS / 自宅サーバ**: 上記 compose をそのまま。最も手軽。
+- **Fly.io**: 同じイメージを `fly launch`（`fly.toml` で `[mounts]` を `/app/data` に割り当てるとキャッシュ永続）。
+- **AWS**: 常駐の性質上 **ECS Fargate(1タスク)** が素直。最安は **EC2 t4g.nano**、定額の楽さなら **Lightsail**。
+  **Lambda は不可**（常時 WebSocket を保持できない）。Fargate の揮発 FS では回答キャッシュは EFS か再温めで対応。
+
 ## ナレッジを新鮮に保つ（任意のバッチ）
 
 回答提供に加えて、kb-bot はナレッジを「育てて（grow）／退役させる（retire）」**任意**のバッチを
@@ -209,35 +282,6 @@ bun run kb:prune --apply                     # _stale/ へ隔離（可逆）→ 
 これらは1つのループになる: **`kb:issues` で育て → `kb:ingest` で索引 → 回答が利用を記録 →
 `kb:prune` で未使用/ドリフトを退役**。上の「ドキュメントは陳腐化*しうる*」が、単なる注意書きでは
 なく“管理された状態”である理由がこれだ。
-
-## セルフホスト（Docker・常駐）
-
-Socket Mode は常時接続のため常駐プロセスが要る。コンテナ1つでどこでも（VPS / Fly.io / Railway /
-Render / ECS Fargate / 自宅サーバ）動かせるようにしてある。
-
-```bash
-cp .env.example .env   # 値を埋める
-docker compose up -d --build
-docker compose logs -f # 起動・取り込み・usage ログを確認
-```
-
-起動時に `docker-entrypoint.sh` が R2/S3 からナレッジを取り込み（`kb:ingest`）→ Bot を起動する。
-FTS インデックスは R2 から導出する派生物なので、コンテナ起動のたびに作り直してよい。
-
-- **回答キャッシュの永続**: `compose.yaml` の `kbdata` ボリュームを `/app/data` にマウントし、再起動後も残す。
-  `KB_DB_PATH` は compose で `/app/data/kb.sqlite` に固定（`.env` の値より優先）。
-- **起動時取り込みのスキップ**: 永続インデックスを使い回す等で取り込み不要なら `KB_INGEST_ON_BOOT=false`。
-- **ナレッジ更新の反映**: R2 の md を更新したら `docker compose restart`（再起動時に再取り込み）。
-- **プラットフォーム切替**: `KB_PLATFORM=slack`（既定）/ `discord`。Discord で常駐するなら `.env` で
-  `KB_PLATFORM=discord` と `DISCORD_BOT_TOKEN` を設定。両方を同時に常駐させたい場合は、compose の
-  サービスを2つ（`KB_PLATFORM` 違い）に分ければよい。
-
-### プロバイダ別メモ
-
-- **VPS / 自宅サーバ**: 上記 compose をそのまま。最も手軽。
-- **Fly.io**: 同じイメージを `fly launch`（`fly.toml` で `[mounts]` を `/app/data` に割り当てるとキャッシュ永続）。
-- **AWS**: 常駐の性質上 **ECS Fargate(1タスク)** が素直。最安は **EC2 t4g.nano**、定額の楽さなら **Lightsail**。
-  **Lambda は不可**（常時 WebSocket を保持できない）。Fargate の揮発 FS では回答キャッシュは EFS か再温めで対応。
 
 ## 構成
 
