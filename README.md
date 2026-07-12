@@ -241,14 +241,20 @@ the bot. The FTS index is derived from R2, so rebuilding it on every boot is fin
 - **Choosing the platform:** `KB_PLATFORM=slack` (default) or `discord`. To run Discord, set
   `KB_PLATFORM=discord` and `DISCORD_BOT_TOKEN` in `.env`. To run both at once, define two compose
   services that differ only by `KB_PLATFORM`.
-- **GitHub App private key:** uncomment the `.pem` mount in `compose.yaml` and point
-  `GITHUB_APP_PRIVATE_KEY_PATH=/app/github-app.pem` at it:
+- **GitHub App private key:** don't edit `compose.yaml` — create a `compose.override.yaml`
+  next to it (gitignored; `docker compose` merges it automatically) and set
+  `GITHUB_APP_PRIVATE_KEY_PATH=/app/github-app.pem` in `.env`:
 
   ```yaml
-  volumes:
-    - kbdata:/app/data
-    - ./github-app.pem:/app/github-app.pem:ro
+  # compose.override.yaml
+  services:
+    bot:
+      volumes:
+        - ./github-app.pem:/app/github-app.pem:ro
   ```
+
+  This keeps your working tree clean while running the App-based auth; the tracked
+  `compose.yaml` stays PAT-friendly for anyone trying kb-bot out.
 
 ### Provider notes
 
