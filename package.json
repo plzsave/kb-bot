@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",
-    "@google/genai": "^2.11.0",
+    "@google/genai": "^2.12.0",
     "@slack/bolt": "^5.0.0",
     "aws4fetch": "^1.0.20",
     "discord.js": "^14.26.4",
