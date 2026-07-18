@@ -4,20 +4,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { countChunks, search } from "../src/kb/db.ts";
 import {
-  buildFixtureDb,
-  buildScorecard,
   citationFails,
   evalCase,
   nextStepFails,
   NEXT_STEP_CUES,
+  validateCases,
+  type RawCase,
+} from "../src/eval/score.ts";
+import {
+  buildScorecard,
   formatScorecard,
   overallPassed,
   statusLabel,
-  validateCases,
   type CaseResult,
-  type RawCase,
   type Scorecard,
-} from "../scripts/kb-eval.ts";
+} from "../src/eval/scorecard.ts";
+import { buildFixtureDb } from "../src/eval/fixtures.ts";
 
 function rawCase(overrides: Partial<RawCase>): RawCase {
   return {
@@ -674,7 +676,7 @@ import {
   exitPassed,
   formatAggregate,
   type Baseline,
-} from "../scripts/kb-eval.ts";
+} from "../src/eval/aggregate.ts";
 
 const mkResult = (name: string, status: "PASS" | "FAIL" | "SKIP" | "ERROR", monitor = false) => ({
   name,

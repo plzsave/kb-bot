@@ -25,6 +25,10 @@
 **目的**: プラットフォーム非依存の回答コア（`core.ts`）と、プラットフォーム別の返信アダプタ
 （`slack.ts` = mrkdwn、`discord.ts` = 2000 字分割）。コアは `ChatReply` 抽象に依存し、UI 差は端に寄せる。
 
+### 評価層 (`src/eval/`)
+**目的**: eval の採点・集計の純粋ロジック（`score.ts` = per-case 採点、`scorecard.ts` = 集計・表示、
+`aggregate.ts` = 集約ゲート、`fixtures.ts` = 隔離索引構築）。LLM/GitHub への副作用は `scripts/kb-eval.ts` 側。
+
 ### バッチ起動口 (`scripts/`)
 **目的**: CLI のエントリ（`kb-ingest.ts` / `kb-search.ts` / `issue-to-kb.ts` / `kb-prune.ts` /
 `kb-eval.ts` など）。ロジック本体は `src/` 側に置き、scripts は引数処理と呼び出しに徹する。
@@ -55,6 +59,7 @@ import type { LlmProvider } from "../llm/provider.ts";
 ## コード構成の原則
 
 - **依存方向**: エントリ → chat → agent → (llm / kb)。下位（llm/kb）が上位を知らない。
+  `src/eval/` は kb のみに依存する独立レイヤ（本番ランタイムには入らない。起動口は `scripts/kb-eval.ts`）。
 - **副作用の隔離**: 外部 I/O（R2/S3・GitHub・SQLite・LLM API）は専用モジュールに閉じ込め、
   ロジックは純粋関数に保ってテスト容易性を確保する。
 - **抽象は端へ**: プロバイダ差・プラットフォーム差はアダプタ（端）に寄せ、コアは中立型のみに依存させる。
