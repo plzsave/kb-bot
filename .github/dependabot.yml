@@ -1,4 +1,16 @@
 version: 2
+
+# ここで設定するのは version update（定常のバージョン追従）のみ。
+# 脆弱性由来の security update は Dependabot アラート検知で即 PR が立ち、
+# 下記の schedule / open-pull-requests-limit の影響を一切受けない。
+# ＝「脆弱性は即時、定常更新は緩く」を両立させるため、こちら側だけ月1にまとめる。
+#
+# 非 major を1本の PR に束ねる理由: 個別 PR を順次マージすると、後続 PR が毎回
+# lock ファイル衝突で作り直される。その再作成時に Dependabot は元のターゲット版では
+# なく「その時点の最新版」へ再解決するため、minor だった PR が major に化ける
+# （2026-07: openai 6.49.0 の PR が 7.1.0 に置き換わった）。束ねれば連鎖自体が起きない。
+# major は判断が必要なのでグループ外に残し、個別 PR で届かせる。
+
 updates:
   # bun エコシステム（package.json / bun.lock の依存）。
   # npm だと package.json しか書き換えられず bun.lock が凍結のまま
@@ -6,17 +18,43 @@ updates:
   - package-ecosystem: bun
     directory: "/"
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
+      interval: monthly
+    # 上限が飽和すると Dependabot は新規 PR を立てられず既存 PR を使い回す
+    # ＝上記の「minor が major に化ける」経路になるので、束ねた上で余裕を持たせる。
+    open-pull-requests-limit: 10
+    groups:
+      bun-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
 
-  # GitHub Actions のバージョン
+  # GitHub Actions のバージョン（SHA ピンのまま Dependabot が上げる）
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: weekly
+      interval: monthly
+    groups:
+      actions-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
 
   # Dockerfile のベースイメージ
   - package-ecosystem: docker
     directory: "/"
     schedule:
-      interval: weekly
+      interval: monthly
+    groups:
+      docker-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
