@@ -20,7 +20,7 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.115.0",
+    "@anthropic-ai/sdk": "^0.116.0",
     "@google/genai": "^2.14.0",
     "@slack/bolt": "^5.0.0",
     "aws4fetch": "^1.0.20",
